@@ -2,7 +2,7 @@ name: Deploy to InfinityFree
 
 on:
   push:
-    branches: [ "main" ] # change if your default branch is 'master'
+    branches: [ "main" ]
 
 jobs:
   ftp-deploy:
@@ -17,5 +17,6 @@ jobs:
           server: ftpupload.net
           username: if0_39836969
           password: mXfZxRyrItM9
-          server-dir: /htdocs
-          local-dir: ./php_app
+          server-dir: /htdocs/
+          local-dir: ./
+          protocol: ftps
