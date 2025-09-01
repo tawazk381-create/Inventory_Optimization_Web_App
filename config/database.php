@@ -1,4 +1,4 @@
-<?php
+<?php 
 // File: config/database.php
 // Database connection via PDO with prepared statements
 declare(strict_types=1);
@@ -69,12 +69,12 @@ if (file_exists($envFile)) {
     }
 }
 
-// -- Read environment variables (defaults for development) ---------------------
-$DB_HOST = getenv('DB_HOST') ?: '127.0.0.1';
+// -- Read environment variables (defaults for production InfinityFree) ----------
+$DB_HOST = getenv('DB_HOST') ?: 'sql100.infinityfree.com';
 $DB_PORT = getenv('DB_PORT') ?: '3306';
-$DB_NAME = getenv('DB_DATABASE') ?: getenv('DB_NAME') ?: 'inventory';
-$DB_USER = getenv('DB_USERNAME') ?: getenv('DB_USER') ?: 'root';
-$DB_PASS = getenv('DB_PASSWORD') ?: '';
+$DB_NAME = getenv('DB_DATABASE') ?: getenv('DB_NAME') ?: 'if0_39836969_inventory';
+$DB_USER = getenv('DB_USERNAME') ?: getenv('DB_USER') ?: 'if0_39836969';
+$DB_PASS = getenv('DB_PASSWORD') ?: 'mXfZxRyrItM9';
 
 // Optional DSN overrides (useful if set by .env)
 $charset = 'utf8mb4';
