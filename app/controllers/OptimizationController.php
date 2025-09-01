@@ -73,21 +73,10 @@ class OptimizationController extends Controller
         $horizon = filter_input(INPUT_POST, 'horizon_days', FILTER_VALIDATE_INT) ?: 90;
         $serviceLevel = filter_input(INPUT_POST, 'service_level', FILTER_VALIDATE_FLOAT) ?: 0.95;
 
+        // ✅ createJob now runs the optimization via the remote Octave API
         $jobId = $this->service->createJob($this->auth->id(), $horizon, $serviceLevel);
 
-        $worker = realpath(__DIR__ . '/../../app/workers/optimization_worker.php');
-
-        if ($worker && is_file($worker)) {
-            try {
-                if (stripos(PHP_OS, 'WIN') === 0) {
-                    pclose(popen('start /B php "' . $worker . '" ' . (int)$jobId, 'r'));
-                } else {
-                    exec('php ' . escapeshellarg($worker) . ' ' . (int)$jobId . ' > /dev/null 2>&1 &');
-                }
-            } catch (Throwable $e) {
-                error_log('Failed to launch optimization worker: ' . $e->getMessage());
-            }
-        }
+        // ⛔ Removed: background worker launch — not needed anymore
 
         $this->redirect('/optimizations/view?job=' . (int)$jobId);
     }

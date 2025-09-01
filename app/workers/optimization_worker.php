@@ -1,6 +1,6 @@
-<?php  
+<?php
 // File: app/workers/optimization_worker.php
-// Processes one optimization job (given jobId) by calling GNU Octave and saving results.
+// Processes one optimization job (given jobId) by calling Octave API (on Render) and saving results.
 
 declare(strict_types=1);
 
@@ -61,8 +61,7 @@ function log_to_file(string $message): void
 }
 
 /**
- * Normalize a single result row from Octave.
- * Skips invalid item_id rows early.
+ * Normalize a single result row from API.
  */
 function normalize_result_row(array $row): ?array
 {
@@ -93,8 +92,7 @@ function normalize_result_row(array $row): ?array
 }
 
 /**
- * Normalize Octave JSON payload.
- * Deduplicates by item_id (keeps first valid entry).
+ * Normalize API JSON payload.
  */
 function normalize_results_payload($decoded): array
 {
@@ -126,12 +124,49 @@ function normalize_results_payload($decoded): array
 }
 
 /**
+ * Call the external Octave API (Render).
+ */
+function call_octave_api(array $items): array
+{
+    $url = "https://octave-api.onrender.com/run";
+
+    $payload = [
+        "items" => $items
+    ];
+
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+
+    $response = curl_exec($ch);
+
+    if ($response === false) {
+        throw new Exception("Curl error: " . curl_error($ch));
+    }
+
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($httpCode !== 200) {
+        throw new Exception("API returned HTTP {$httpCode}: {$response}");
+    }
+
+    $decoded = json_decode($response, true);
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        throw new Exception("Invalid JSON from API: " . json_last_error_msg());
+    }
+
+    return $decoded;
+}
+
+/**
  * Processes one optimization job.
  */
 function run_optimization_worker(PDO $DB, ?int $jobId = null): void
 {
     $logPrefix = '[' . date('c') . ']';
-    $tmpDir = sys_get_temp_dir();
 
     // --- claim job ---
     if ($jobId === null) {
@@ -180,59 +215,27 @@ function run_optimization_worker(PDO $DB, ?int $jobId = null): void
         $items = $itStmt->fetchAll(PDO::FETCH_ASSOC);
         if (empty($items)) throw new Exception("No active items to optimize");
 
-        // --- write input CSV ---
-        $inPath  = $tmpDir . "/opt_in_job_{$jobId}_" . getmypid() . ".csv";
-        $outPath = $tmpDir . "/opt_out_job_{$jobId}_" . getmypid() . ".json";
-        $fh = fopen($inPath, 'w');
-        if (!$fh) throw new Exception("Failed to open temp input file {$inPath}");
-        fputcsv($fh, ['id','avg_daily_demand','lead_time_days','unit_cost','safety_stock','order_cost']);
-        foreach ($items as $it) {
-            fputcsv($fh, [$it['id'],$it['avg_daily_demand'],$it['lead_time_days'],$it['unit_cost'],$it['safety_stock'],$it['order_cost']]);
-        }
-        fclose($fh);
+        // --- call Octave API instead of local CLI ---
+        $apiResponse = call_octave_api($items);
+        log_to_file("Raw API response for job {$jobId}: " . json_encode($apiResponse));
 
-        // --- run Octave ---
-        $octaveScript = realpath(__DIR__ . '/../../app/octave/worker_runner.m');
-        if (!$octaveScript || !file_exists($octaveScript)) throw new Exception("Octave runner missing at {$octaveScript}");
-        $call = sprintf("worker_runner('%s','%s');", addslashes($inPath), addslashes($outPath));
-        $octaveCmd = "octave-cli --quiet --eval " . escapeshellarg($call) . " 2>&1";
-
-        $output = []; $ret = 0;
-        exec($octaveCmd, $output, $ret);
-        log_to_file("Octave output for job {$jobId}:\n" . implode("\n", $output));
-        if ($ret !== 0) throw new Exception("Octave runner failed (ret={$ret})");
-        if (!file_exists($outPath)) throw new Exception("Octave did not produce output file {$outPath}");
-
-        $json = file_get_contents($outPath);
-        if ($json === false) throw new Exception("Failed to read JSON output {$outPath}");
-        log_to_file("Raw JSON from Octave for job {$jobId}: " . $json);
-
-        $decoded = json_decode($json, true);
-        if (json_last_error() !== JSON_ERROR_NONE) throw new Exception("Invalid JSON: " . json_last_error_msg());
-
-        $results = normalize_results_payload($decoded);
+        $results = normalize_results_payload($apiResponse);
         log_to_file("Normalized results for job {$jobId}: " . json_encode($results));
 
-        if (empty($results)) throw new Exception("Octave returned no usable rows after normalization.");
+        if (empty($results)) throw new Exception("API returned no usable rows after normalization.");
 
         // --- save results ---
         $optResultModel = new OptimizationResult();
-        foreach ($results as $r) {
-            log_to_file("Saving row for job {$jobId}: " . json_encode($r));
-        }
         $optResultModel->saveResults($jobId, $results);
         $savedCount = count($results);
         log_to_file("Requested save of {$savedCount} rows for job {$jobId}");
 
-        // ✅ Double-check and log what was actually written in DB
+        // ✅ Double-check DB
         $checkStmt = $DB->prepare("SELECT * FROM optimization_results WHERE job_id = :job_id");
         $checkStmt->execute(['job_id' => $jobId]);
         $rows = $checkStmt->fetchAll(PDO::FETCH_ASSOC);
         $dbCount = count($rows);
         log_to_file("Verification: job {$jobId} has {$dbCount} rows in optimization_results (expected {$savedCount})");
-        foreach ($rows as $row) {
-            log_to_file("🔎 DB row: " . json_encode($row));
-        }
 
         // --- update snapshot ---
         $optModel = new Optimization();
@@ -249,13 +252,12 @@ function run_optimization_worker(PDO $DB, ?int $jobId = null): void
             WHERE id = :id
         ");
         $upd->execute([
-            'total'     => $dbCount, // use actual DB count
+            'total'     => $dbCount,
             'processed' => $dbCount,
             'res'       => json_encode($results),
             'id'        => $jobId
         ]);
 
-        @unlink($inPath); @unlink($outPath);
         $msg = "{$logPrefix} Job {$jobId} completed successfully with {$dbCount} rows saved";
         echo $msg . "\n"; log_to_file($msg);
     } catch (Exception $e) {

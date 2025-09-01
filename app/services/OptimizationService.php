@@ -1,10 +1,20 @@
 <?php
 // File: app/services/OptimizationService.php
+// Purpose: Create & run optimization jobs by calling the Render-hosted Octave API.
+// NOTES:
+// - This version no longer shells out to octave-cli (InfinityFree restriction).
+// - It collects items from MySQL, posts them as JSON to OCTAVE_API_URL (/run),
+//   normalizes the response, writes results to DB, and updates the job record.
+
+declare(strict_types=1);
 
 class OptimizationService
 {
     protected PDO $db;
     protected OptimizationResult $resultModel;
+
+    // Fallback API URL if env not present
+    private string $defaultApiUrl = 'https://octave-api.onrender.com/run';
 
     public function __construct()
     {
@@ -14,7 +24,7 @@ class OptimizationService
     }
 
     /**
-     * Create a new optimization job and run the Octave worker to completion.
+     * Create a new optimization job and POST it to the Octave API.
      */
     public function createJob(int $userId, int $horizonDays, float $serviceLevel): int
     {
@@ -38,159 +48,178 @@ class OptimizationService
 
         $jobId = (int)$this->db->lastInsertId();
 
-        $this->runOctaveJob($jobId);
+        // Immediately run the job through the remote API
+        $this->runOctaveJob($jobId, $horizonDays, $serviceLevel);
 
         return $jobId;
     }
 
-    protected function jobPaths(int $jobId): array
+    /**
+     * Main pipeline: read items -> call API -> normalize -> persist -> mark status.
+     */
+    protected function runOctaveJob(int $jobId, int $horizonDays, float $serviceLevel): void
     {
-        $root = dirname(__DIR__, 2);
+        $this->markJobRunning($jobId);
 
-        $jobDir   = $root . "/storage/opt_jobs/job_$jobId";
-        $logDir   = $root . "/storage/logs";
-        $octDir   = $root . "/app/octave";
+        // 1) Collect items to optimize
+        $items = $this->fetchItemsForOptimization();
+        if (empty($items)) {
+            $this->markJobFailed($jobId, 'No items available to optimize.');
+            return;
+        }
 
-        if (!is_dir($jobDir)) @mkdir($jobDir, 0777, true);
-        if (!is_dir($logDir)) @mkdir($logDir, 0777, true);
-
-        return [
-            'root'        => $root,
-            'octave_dir'  => $octDir,
-            'job_dir'     => $jobDir,
-            'input_csv'   => "$jobDir/input.csv",
-            'output_json' => "$jobDir/output.json",
-            'runner_m'    => "$octDir/worker_runner.m",
-            'shim_m'      => "$jobDir/run_job.m",
-            'log_file'    => "$logDir/job_{$jobId}.log",
+        // 2) Prepare POST payload for Render API
+        $payload = [
+            'job_id'        => $jobId,
+            'horizon_days'  => $horizonDays,
+            'service_level' => $serviceLevel,
+            'items'         => $items,
         ];
+
+        // 3) Call Octave API
+        $apiUrl = getenv('OCTAVE_API_URL') ?: $this->defaultApiUrl;
+        $this->log_to_file("OptimizationService: POST {$apiUrl} (job {$jobId})");
+        $response = $this->postJson($apiUrl, $payload, 120); // 120s timeout
+
+        if (!$response['ok']) {
+            $reason = "Remote API call failed: " . $response['error'];
+            $this->log_to_file("❌ {$reason} (job {$jobId})");
+            $this->markJobFailed($jobId, $reason);
+            return;
+        }
+
+        // 4) Decode & normalize results
+        $decoded = $response['json'];
+        if (!is_array($decoded)) {
+            $this->markJobFailed($jobId, 'Invalid JSON from remote API.');
+            return;
+        }
+
+        $results = $this->normalize_results_payload($decoded);
+        $this->log_to_file("Normalization produced " . count($results) . " rows (job {$jobId}).");
+
+        if (empty($results)) {
+            $this->markJobFailed($jobId, 'Remote API returned no usable rows after normalization.');
+            return;
+        }
+
+        // 5) Update items table best-effort (EOQ/ROP/SS columns if present)
+        $this->applyItemResultsBestEffort($results);
+
+        // 6) Persist results in optimization_results (row-per-item)
+        $savedCount = $this->saveOptimizationResults($jobId, $results);
+
+        // 7) Mark job complete with a compact snapshot
+        $this->markJobComplete($jobId, $results, $savedCount);
+
+        $this->log_to_file("✅ Job {$jobId} complete. Saved {$savedCount} rows.");
     }
 
-    protected function buildInputCsv(string $csvPath): int
+    /**
+     * Get items to send to Octave service.
+     * Adjust/extend the select to match what your Octave container expects.
+     */
+    protected function fetchItemsForOptimization(): array
     {
         $sql = "
             SELECT
-                id,
-                COALESCE(avg_daily_demand, 0)   AS avg_daily_demand,
-                COALESCE(lead_time_days, 0)     AS lead_time_days,
-                COALESCE(safety_stock, 0)       AS safety_stock
+                id AS item_id,
+                COALESCE(avg_daily_demand, 0) AS avg_daily_demand,
+                COALESCE(lead_time_days, 0)   AS lead_time_days,
+                COALESCE(unit_cost, 0)        AS unit_cost,
+                COALESCE(safety_stock, 0)     AS safety_stock,
+                COALESCE(order_cost, 50)      AS order_cost
             FROM items
+            WHERE is_active = 1
         ";
         $stmt = $this->db->query($sql);
         $rows = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
-
-        $fh = fopen($csvPath, 'w');
-        if (!$fh) throw new RuntimeException("Unable to write input CSV at: $csvPath");
-
-        fputcsv($fh, ['id','avg_daily_demand','lead_time_days','safety_stock']);
-
-        $count = 0;
-        foreach ($rows as $r) {
-            fputcsv($fh, [
-                (int)$r['id'],
-                (float)$r['avg_daily_demand'],
-                (float)$r['lead_time_days'],
-                (float)$r['safety_stock'],
-            ]);
-            $count++;
+        // Ensure numeric types
+        foreach ($rows as &$r) {
+            $r['item_id']          = (int)$r['item_id'];
+            $r['avg_daily_demand'] = (float)$r['avg_daily_demand'];
+            $r['lead_time_days']   = (float)$r['lead_time_days'];
+            $r['unit_cost']        = (float)$r['unit_cost'];
+            $r['safety_stock']     = (float)$r['safety_stock'];
+            $r['order_cost']       = (float)$r['order_cost'];
         }
-        fclose($fh);
-
-        return $count;
+        return $rows;
     }
 
-    protected function runOctaveJob(int $jobId): void
+    /**
+     * POST JSON to the remote Octave API.
+     * Returns ['ok'=>bool, 'json'=>mixed, 'status'=>int|null, 'error'=>string|null]
+     */
+    protected function postJson(string $url, array $data, int $timeoutSeconds = 60): array
     {
-        $paths = $this->jobPaths($jobId);
-        $exported = $this->buildInputCsv($paths['input_csv']);
-        $this->markJobRunning($jobId);
+        $ch = curl_init($url);
+        if ($ch === false) {
+            return ['ok' => false, 'json' => null, 'status' => null, 'error' => 'curl_init failed'];
+        }
 
-        $octaveDir = $this->toOctavePath($paths['octave_dir']);
-        $inPath    = $this->toOctavePath($paths['input_csv']);
-        $outPath   = $this->toOctavePath($paths['output_json']);
-
-        $shim = implode(PHP_EOL, [
-            "% Auto-generated per job",
-            "addpath('$octaveDir');",
-            "infile  = '$inPath';",
-            "outfile = '$outPath';",
-            "worker_runner(infile, outfile);",
+        $json = json_encode($data);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST           => true,
+            CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
+            CURLOPT_POSTFIELDS     => $json,
+            CURLOPT_TIMEOUT        => $timeoutSeconds,
+            CURLOPT_CONNECTTIMEOUT => 15,
         ]);
-        if (false === file_put_contents($paths['shim_m'], $shim)) {
-            $this->markJobFailed($jobId, "Failed to write shim script");
-            return;
+
+        $body   = curl_exec($ch);
+        $errno  = curl_errno($ch);
+        $errstr = curl_error($ch);
+        $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($errno) {
+            return ['ok' => false, 'json' => null, 'status' => null, 'error' => "cURL error {$errno}: {$errstr}"];
+        }
+        if ($status < 200 || $status >= 300) {
+            return ['ok' => false, 'json' => null, 'status' => $status, 'error' => "HTTP {$status}: {$body}"];
         }
 
-        $octave = 'octave';
-        $cmd = $this->buildExecCommand([$octave, '-qf', $paths['shim_m']], $paths['log_file']);
-        $exitCode = $this->runCommand($cmd);
-
-        if ($exitCode !== 0) {
-            $this->markJobFailed($jobId, "Octave exited with code $exitCode (see log)");
-            return;
+        $decoded = json_decode($body, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            return ['ok' => false, 'json' => null, 'status' => $status, 'error' => 'JSON decode error: ' . json_last_error_msg()];
         }
 
-        if (!is_file($paths['output_json'])) {
-            $this->markJobFailed($jobId, "Octave did not produce output.json");
-            return;
+        return ['ok' => true, 'json' => $decoded, 'status' => $status, 'error' => null];
+    }
+
+    /**
+     * Save results into optimization_results inside a transaction.
+     * Returns how many rows were saved.
+     */
+    protected function saveOptimizationResults(int $jobId, array $results): int
+    {
+        if (empty($results)) return 0;
+
+        $this->db->beginTransaction();
+        try {
+            $count = 0;
+            foreach ($results as $r) {
+                if (!isset($r['item_id']) || (int)$r['item_id'] <= 0) {
+                    continue;
+                }
+                // Model’s interface expects a single row at a time.
+                $this->resultModel->saveResults($jobId, $r);
+                $count++;
+            }
+            $this->db->commit();
+            $this->log_to_file("✅ Saved {$count} optimization_results rows for job {$jobId}");
+            return $count;
+        } catch (\Throwable $t) {
+            $this->db->rollBack();
+            $this->log_to_file("❌ Failed to save optimization_results for job {$jobId}: " . $t->getMessage());
+            return 0;
         }
-
-        $json = file_get_contents($paths['output_json']);
-        $decoded = json_decode($json, true);
-
-        if (!is_array($decoded)) {
-            $this->markJobFailed($jobId, "Invalid JSON from worker");
-            return;
-        }
-
-        // ✅ Update items table (best effort)
-        $this->applyItemResultsBestEffort($decoded);
-
-        // ✅ Persist job results in optimization_results table (single-row interface)
-        $saved = $this->saveOptimizationResults($jobId, $decoded);
-
-        // ✅ Mark job as complete, with JSON snapshot also in optimization_jobs
-        // Use the number of saved rows as items_processed for accuracy.
-        $this->markJobComplete($jobId, $decoded, $saved);
     }
 
-    protected function toOctavePath(string $path): string
-    {
-        $normalized = str_replace('\\', '/', $path);
-        return str_replace("'", "''", $normalized);
-    }
-
-    protected function buildExecCommand(array $argv, string $logFile): string
-    {
-        $parts = array_map(function ($p) {
-            $p = str_replace('"', '\"', $p);
-            return "\"$p\"";
-        }, $argv);
-
-        $cmd = implode(' ', $parts);
-        $cmd .= $this->isWindows()
-            ? ' > "' . $logFile . '" 2>&1'
-            : ' > ' . escapeshellarg($logFile) . ' 2>&1';
-
-        return $cmd;
-    }
-
-    protected function runCommand(string $cmd): int
-    {
-        $proc = proc_open($cmd, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
-        if (!is_resource($proc)) return 1;
-
-        if (isset($pipes[1])) { stream_get_contents($pipes[1]); fclose($pipes[1]); }
-        if (isset($pipes[2])) { stream_get_contents($pipes[2]); fclose($pipes[2]); }
-
-        return proc_close($proc);
-    }
-
-    protected function isWindows(): bool
-    {
-        return strtoupper(substr(PHP_OS, 0, 3)) === 'WIN';
-    }
-
+    /**
+     * Best-effort update of items table columns (EOQ/ROP/SS) if present.
+     */
     protected function applyItemResultsBestEffort(array $results): void
     {
         $columns = $this->fetchTableColumns('items');
@@ -211,15 +240,15 @@ class OptimizationService
 
                 if ($colEOQ && isset($r['eoq'])) {
                     $sets[] = "$colEOQ = :eoq";
-                    $params['eoq'] = (int)$r['eoq'];
+                    $params['eoq'] = (float)$r['eoq'];
                 }
                 if ($colROP && isset($r['reorder_point'])) {
                     $sets[] = "$colROP = :rop";
-                    $params['rop'] = (int)$r['reorder_point'];
+                    $params['rop'] = (float)$r['reorder_point'];
                 }
                 if ($colSS && isset($r['safety_stock'])) {
                     $sets[] = "$colSS = :ss";
-                    $params['ss'] = (int)$r['safety_stock'];
+                    $params['ss'] = (float)$r['safety_stock'];
                 }
 
                 if (empty($sets)) continue;
@@ -231,6 +260,7 @@ class OptimizationService
             $this->db->commit();
         } catch (\Throwable $t) {
             $this->db->rollBack();
+            $this->log_to_file("⚠️ Best-effort items update failed: " . $t->getMessage());
         }
     }
 
@@ -245,34 +275,66 @@ class OptimizationService
     }
 
     /**
-     * ✅ Save results into optimization_results inside a transaction.
-     * Uses the model's single-row save interface and returns how many rows were saved.
+     * Normalization helpers (tolerant to slightly different keys from Octave service).
      */
-    protected function saveOptimizationResults(int $jobId, array $results): int
+    protected function normalize_result_row(array $row): ?array
     {
-        if (empty($results)) return 0;
-
-        $this->db->beginTransaction();
-        try {
-            $count = 0;
-            foreach ($results as $r) {
-                // Only attempt save when item_id is present
-                if (!isset($r['item_id']) || (int)$r['item_id'] <= 0) {
-                    continue;
-                }
-                $this->resultModel->saveResults($jobId, $r);
-                $count++;
-            }
-            $this->db->commit();
-            error_log("✅ Saved {$count} optimization results for job {$jobId}");
-            return $count;
-        } catch (\Throwable $t) {
-            $this->db->rollBack();
-            error_log("❌ Failed to save optimization results for job {$jobId}: " . $t->getMessage());
-            return 0;
+        // Accept item_id or id
+        if (isset($row['item_id'])) {
+            $itemId = (int)$row['item_id'];
+        } elseif (isset($row['id'])) {
+            $itemId = (int)$row['id'];
+        } else {
+            $this->log_to_file("⚠️ Skipping row without item id: " . json_encode($row));
+            return null;
         }
+
+        if ($itemId <= 0) {
+            $this->log_to_file("⚠️ Skipping row with invalid item_id={$itemId}: " . json_encode($row));
+            return null;
+        }
+
+        $eoq = $row['eoq'] ?? ($row['EOQ'] ?? null);
+        $rop = $row['reorder_point'] ?? ($row['ROP'] ?? null);
+        $ss  = $row['safety_stock'] ?? ($row['SS'] ?? null);
+
+        return [
+            'item_id'       => $itemId,
+            'eoq'           => (isset($eoq) && $eoq !== '') ? (float)$eoq : null,
+            'reorder_point' => (isset($rop) && $rop !== '') ? (float)$rop : null,
+            'safety_stock'  => (isset($ss)  && $ss  !== '') ? (float)$ss  : null,
+        ];
     }
 
+    protected function normalize_results_payload($decoded): array
+    {
+        // Allow either {"results":[...]} or just [...]
+        if (is_array($decoded) && isset($decoded['results']) && is_array($decoded['results'])) {
+            $decoded = $decoded['results'];
+        }
+        if (!is_array($decoded)) return [];
+
+        $out  = [];
+        $seen = [];
+        foreach ($decoded as $row) {
+            if (!is_array($row)) continue;
+            $norm = $this->normalize_result_row($row);
+            if ($norm === null) continue;
+
+            $id = $norm['item_id'];
+            if (isset($seen[$id])) {
+                $this->log_to_file("⚠️ Duplicate item_id {$id}, keeping first and skipping.");
+                continue;
+            }
+            $seen[$id] = true;
+            $out[] = $norm;
+        }
+        return $out;
+    }
+
+    /**
+     * Job status helpers
+     */
     public function markJobRunning(int $jobId): void
     {
         $stmt = $this->db->prepare("
@@ -286,7 +348,6 @@ class OptimizationService
     public function markJobComplete(int $jobId, ?array $results = null, ?int $itemsProcessed = null): void
     {
         $json = $results ? json_encode($results) : null;
-
         $stmt = $this->db->prepare("
             UPDATE optimization_jobs
             SET status = 'complete',
@@ -305,7 +366,6 @@ class OptimizationService
     public function markJobFailed(int $jobId, string $error = ''): void
     {
         $payload = $error ? json_encode(['error' => $error]) : null;
-
         $stmt = $this->db->prepare("
             UPDATE optimization_jobs
             SET status = 'failed',
@@ -380,5 +440,25 @@ class OptimizationService
         $stmt = $this->db->query("SELECT id FROM optimization_jobs ORDER BY created_at DESC LIMIT 1");
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         return $row ? (int)$row['id'] : null;
+    }
+
+    /**
+     * Very small logging helper (storage/logs/optimization_service.log)
+     */
+    protected function log_to_file(string $message): void
+    {
+        $root = dirname(__DIR__, 2);
+        $dir  = $root . '/storage/logs';
+        if (!is_dir($dir)) @mkdir($dir, 0777, true);
+        $file = $dir . '/optimization_service.log';
+
+        // Simple rotation at ~5MB
+        if (file_exists($file) && filesize($file) > 5 * 1024 * 1024) {
+            $ts = date('Ymd-His');
+            @rename($file, $dir . "/optimization_service.log.$ts");
+        }
+
+        $line = '[' . date('c') . '] ' . $message . PHP_EOL;
+        @file_put_contents($file, $line, FILE_APPEND | LOCK_EX);
     }
 }
