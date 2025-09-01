@@ -1,0 +1,22 @@
+# File: .htaccess  (at C:\xampp\htdocs\Inventory_Optimization_Web_App\.htaccess)
+
+Options -Indexes
+Options -MultiViews
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # URL path to your project root as seen in the browser:
+    RewriteBase /Inventory_Optimization_Web_App/
+
+    # Serve existing files/directories as-is
+    RewriteCond %{REQUEST_FILENAME} -f [OR]
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^ - [L]
+
+    # Route everything else to the root front controller
+    # (root index.php then boots /public/index.php)
+    RewriteRule ^ index.php [L,QSA]
+</IfModule>
+
+AddDefaultCharset utf-8
