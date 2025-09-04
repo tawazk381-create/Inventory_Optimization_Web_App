@@ -1,25 +1,21 @@
 # File: public/.htaccess
 
+# Disable directory listing
 Options -Indexes
-Options -MultiViews
 
 <IfModule mod_rewrite.c>
     RewriteEngine On
 
-    # You can omit RewriteBase here; rules work per-dir.
-    # If you ever browse directly to /Inventory_Optimization_Web_App/public/,
-    # these rules still give you clean routing.
-
-    # Serve existing files/directories as-is
+    # Serve existing files or directories as-is
     RewriteCond %{REQUEST_FILENAME} -f [OR]
     RewriteCond %{REQUEST_FILENAME} -d
     RewriteRule ^ - [L]
 
-    # Otherwise route everything to front controller
+    # Route everything else to front controller
     RewriteRule ^ index.php [L,QSA]
 </IfModule>
 
-# Harden a bit (protect dotfiles)
+# Protect sensitive files
 <IfModule mod_authz_core.c>
   <FilesMatch "^\.(env|git|htaccess)$">
     Require all denied
