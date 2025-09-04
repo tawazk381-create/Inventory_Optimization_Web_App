@@ -1,14 +1,5 @@
 <?php
 // File: resources/views/auth/register.php
-
-// Ensure CSRF token is generated before rendering
-if (session_status() !== PHP_SESSION_ACTIVE) {
-    session_start();
-}
-if (empty($_SESSION['csrf_token'])) {
-    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-}
-$csrfToken = $_SESSION['csrf_token'];
 ?>
 <div class="row justify-content-center">
     <div class="col-md-6">
@@ -19,8 +10,8 @@ $csrfToken = $_SESSION['csrf_token'];
             <div class="card-body">
                 <form action="<?= BASE_PATH ?>/users/register" method="POST" class="needs-validation" novalidate>
                     
-                    <!-- CSRF token field -->
-                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') ?>">
+                    <!-- ✅ CSRF token field -->
+                    <?= csrf_field() ?>
 
                     <div class="form-group mb-3">
                         <label for="name">Full Name</label>

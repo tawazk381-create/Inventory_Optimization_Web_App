@@ -37,14 +37,8 @@ class RegisterController extends Controller
             session_start();
         }
 
-        // ✅ Verify CSRF token
-        $submittedToken = $_POST['csrf_token'] ?? '';
-        $validToken     = $_SESSION['csrf_token'] ?? '';
-
-        if (!$submittedToken || !$validToken || !hash_equals($validToken, $submittedToken)) {
-            flash('error', 'CSRF token mismatch. Please try again.');
-            redirect('/users/register');
-        }
+        // ✅ Use global CSRF verifier
+        verify_csrf();
 
         global $DB;
 
@@ -128,14 +122,8 @@ class RegisterController extends Controller
             session_start();
         }
 
-        // ✅ Verify CSRF token before allowing deletion
-        $submittedToken = $_POST['csrf_token'] ?? ($_GET['csrf_token'] ?? '');
-        $validToken     = $_SESSION['csrf_token'] ?? '';
-
-        if (!$submittedToken || !$validToken || !hash_equals($validToken, $submittedToken)) {
-            flash('error', 'CSRF token mismatch. Please try again.');
-            redirect('/users/manage');
-        }
+        // ✅ Use global CSRF verifier
+        verify_csrf();
 
         $userModel = new User();
 
