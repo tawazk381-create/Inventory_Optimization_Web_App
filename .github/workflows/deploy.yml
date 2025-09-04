@@ -22,10 +22,10 @@ jobs:
             set ftp:ssl-allow no;
             open -u ${{ secrets.FTP_USERNAME }},${{ secrets.FTP_PASSWORD }} ftp://ftpupload.net;
             
-            # Upload contents of public/ into htdocs/
+            # Upload public contents into htdocs/
             mirror -R ./public /htdocs
-            
-            # Upload backend files beside htdocs/
+
+            # Upload backend into same level
             mirror -R ./app /htdocs/app
             mirror -R ./config /htdocs/config
             mirror -R ./routes /htdocs/routes
