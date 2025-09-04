@@ -14,16 +14,27 @@ if (!defined('APP_NAME')) {
     define('APP_NAME', 'Inventory Optimization');
 }
 if (!defined('APP_ENV')) {
-    define('APP_ENV', getenv('APP_ENV') ?: 'development');
+    define('APP_ENV', getenv('APP_ENV') ?: 'production'); // default to production on hosting
 }
 if (!defined('APP_DEBUG')) {
     // In development show errors; in production set false.
-    define('APP_DEBUG', true);
+    define('APP_DEBUG', APP_ENV === 'development');
+}
+
+/* Host role (frontend vs worker) */
+if (!defined('APP_HOST')) {
+    // APP_HOST can be set in .env: "frontend" (InfinityFree) or "worker" (Render)
+    define('APP_HOST', getenv('APP_HOST') ?: 'frontend');
+}
+
+/* Worker service URL (Render endpoint for background jobs) */
+if (!defined('WORKER_URL')) {
+    // Example: https://your-render-worker.onrender.com
+    define('WORKER_URL', getenv('WORKER_URL') ?: '');
 }
 
 /* Base path and Base URL: only define if not already defined. */
 if (!defined('BASE_PATH')) {
-    // Try to compute from SCRIPT_NAME if available
     $scriptName = isset($_SERVER['SCRIPT_NAME']) ? str_replace('\\', '/', $_SERVER['SCRIPT_NAME']) : '';
     $scriptDir = $scriptName !== '' ? rtrim(dirname($scriptName), '/') : '';
     if ($scriptDir === '/' || $scriptDir === '.') {
@@ -53,5 +64,9 @@ if (!defined('DEFAULT_PER_PAGE')) {
     define('DEFAULT_PER_PAGE', 15);
 }
 
-/* You can add any other non-sensitive app-wide constants here. 
-   Database credentials and connection should live in config/database.php */
+/* 
+ * ✅ Notes:
+ * - Set APP_HOST=frontend on InfinityFree, APP_HOST=worker on Render.
+ * - Set WORKER_URL in .env on InfinityFree to point to Render worker.
+ *   Example: WORKER_URL=https://your-render-service.onrender.com
+ */
