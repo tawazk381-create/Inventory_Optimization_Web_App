@@ -6,6 +6,12 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
+// Ensure CSRF token exists
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrfToken = $_SESSION['csrf_token'];
+
 $roleName = $_SESSION['role_name'] ?? '';
 $currentUserId = $_SESSION['user_id'] ?? null;
 ?>
@@ -34,10 +40,10 @@ $currentUserId = $_SESSION['user_id'] ?? null;
                                 <?php foreach ($users as $u): ?>
                                     <tr>
                                         <td><?= (int)$u['id'] ?></td>
-                                        <td><?= htmlspecialchars($u['name']) ?></td>
-                                        <td><?= htmlspecialchars($u['email']) ?></td>
-                                        <td><?= htmlspecialchars($u['role_name'] ?? 'N/A') ?></td>
-                                        <td><?= htmlspecialchars($u['created_at'] ?? '') ?></td>
+                                        <td><?= htmlspecialchars($u['name'], ENT_QUOTES, 'UTF-8') ?></td>
+                                        <td><?= htmlspecialchars($u['email'], ENT_QUOTES, 'UTF-8') ?></td>
+                                        <td><?= htmlspecialchars($u['role_name'] ?? 'N/A', ENT_QUOTES, 'UTF-8') ?></td>
+                                        <td><?= htmlspecialchars($u['created_at'] ?? '', ENT_QUOTES, 'UTF-8') ?></td>
                                         <td>
                                             <?php if ($roleName === 'Admin'): ?>
                                                 <?php if ((int)$u['id'] === (int)$currentUserId): ?>
@@ -48,7 +54,7 @@ $currentUserId = $_SESSION['user_id'] ?? null;
                                                           onsubmit="return confirm('Are you sure you want to remove this user?');"
                                                           style="display:inline;">
                                                         <input type="hidden" name="id" value="<?= (int)$u['id'] ?>">
-                                                        <?= csrf_field() ?>
+                                                        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') ?>">
                                                         <button type="submit" class="btn btn-danger btn-sm">
                                                             Delete
                                                         </button>

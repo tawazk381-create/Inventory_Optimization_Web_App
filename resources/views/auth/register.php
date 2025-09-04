@@ -1,5 +1,14 @@
 <?php
 // File: resources/views/auth/register.php
+
+// Ensure CSRF token is generated before rendering
+if (session_status() !== PHP_SESSION_ACTIVE) {
+    session_start();
+}
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrfToken = $_SESSION['csrf_token'];
 ?>
 <div class="row justify-content-center">
     <div class="col-md-6">
@@ -9,7 +18,9 @@
             </div>
             <div class="card-body">
                 <form action="<?= BASE_PATH ?>/users/register" method="POST" class="needs-validation" novalidate>
-                    <?= csrf_field() ?>
+                    
+                    <!-- CSRF token field -->
+                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') ?>">
 
                     <div class="form-group mb-3">
                         <label for="name">Full Name</label>
@@ -25,8 +36,8 @@
 
                     <div class="form-group mb-3">
                         <label for="password">Password</label>
-                        <input type="password" name="password" id="password" class="form-control" required minlength="6">
-                        <div class="invalid-feedback">Password must be at least 6 characters.</div>
+                        <input type="password" name="password" id="password" class="form-control" required minlength="8">
+                        <div class="invalid-feedback">Password must be at least 8 characters.</div>
                     </div>
 
                     <div class="form-group mb-3">
@@ -41,7 +52,7 @@
                             <option value="">-- Select Role --</option>
                             <?php foreach ($roles as $role): ?>
                                 <option value="<?= (int)$role['id'] ?>">
-                                    <?= htmlspecialchars($role['name']) ?>
+                                    <?= htmlspecialchars($role['name'], ENT_QUOTES, 'UTF-8') ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>

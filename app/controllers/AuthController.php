@@ -35,13 +35,8 @@ class AuthController extends Controller
             session_start();
         }
 
-        // ✅ Verify CSRF token
-        try {
-            verify_csrf();
-        } catch (Throwable $e) {
-            flash('error', 'Invalid request. Please try again.');
-            redirect('/login');
-        }
+        // ✅ Use global CSRF verifier
+        verify_csrf();
 
         // Sanitize inputs
         $email    = filter_var(trim($_POST['email'] ?? ''), FILTER_SANITIZE_EMAIL);
@@ -96,7 +91,7 @@ class AuthController extends Controller
         $this->auth->logout();
 
         // ✅ Regenerate CSRF token after logout for safety
-        unset($_SESSION['csrf_token']);
+        unset($_SESSION['_token']);
 
         redirect('/login');
     }

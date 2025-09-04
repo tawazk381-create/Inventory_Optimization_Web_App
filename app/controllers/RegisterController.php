@@ -33,6 +33,19 @@ class RegisterController extends Controller
      */
     public function handleRegister(): void
     {
+        if (session_status() === PHP_SESSION_NONE) {
+            session_start();
+        }
+
+        // ✅ Verify CSRF token
+        $submittedToken = $_POST['csrf_token'] ?? '';
+        $validToken     = $_SESSION['csrf_token'] ?? '';
+
+        if (!$submittedToken || !$validToken || !hash_equals($validToken, $submittedToken)) {
+            flash('error', 'CSRF token mismatch. Please try again.');
+            redirect('/users/register');
+        }
+
         global $DB;
 
         $name     = trim($_POST['name'] ?? '');
@@ -98,7 +111,7 @@ class RegisterController extends Controller
     public function manageUsers(): void
     {
         $userModel = new User();
-        $users = $userModel->getAllWithRoles(); // ✅ use public method instead of protected find()
+        $users = $userModel->getAllWithRoles();
 
         $this->view('users/manage', [
             'title' => 'Manage Users',
@@ -111,6 +124,19 @@ class RegisterController extends Controller
      */
     public function deleteUser(int $id): void
     {
+        if (session_status() === PHP_SESSION_NONE) {
+            session_start();
+        }
+
+        // ✅ Verify CSRF token before allowing deletion
+        $submittedToken = $_POST['csrf_token'] ?? ($_GET['csrf_token'] ?? '');
+        $validToken     = $_SESSION['csrf_token'] ?? '';
+
+        if (!$submittedToken || !$validToken || !hash_equals($validToken, $submittedToken)) {
+            flash('error', 'CSRF token mismatch. Please try again.');
+            redirect('/users/manage');
+        }
+
         $userModel = new User();
 
         if ($userModel->delete($id)) {

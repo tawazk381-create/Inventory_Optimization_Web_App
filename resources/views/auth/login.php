@@ -6,6 +6,8 @@
         <div class="card shadow-sm">
             <div class="card-body">
                 <form method="POST" action="<?= htmlspecialchars(BASE_PATH . '/login', ENT_QUOTES, 'UTF-8') ?>">
+                    
+                    <!-- ✅ CSRF token field -->
                     <?= csrf_field() ?>
 
                     <div class="form-group mb-3">
@@ -30,18 +32,6 @@
                             required
                         >
                     </div>
-
-                    <!-- ❌ Removed insecure role selector
-                    <div class="form-group mb-3">
-                        <label for="role">Login As</label>
-                        <select name="role" id="role" class="form-control" required>
-                            <option value="">-- Select Role --</option>
-                            <option value="Admin">Admin</option>
-                            <option value="Manager">Manager</option>
-                            <option value="Staff">Staff</option>
-                        </select>
-                    </div>
-                    -->
 
                     <button type="submit" class="btn btn-success w-100">Login</button>
                 </form>
