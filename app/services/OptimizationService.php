@@ -1,4 +1,4 @@
-<?php
+<?php 
 // File: app/services/OptimizationService.php
 // Purpose: Create & run optimization jobs by calling the Render-hosted Octave API.
 // NOTES:
@@ -118,32 +118,79 @@ class OptimizationService
     /**
      * Get items to send to Octave service.
      * Adjust/extend the select to match what your Octave container expects.
+     *
+     * This implementation is defensive: it will detect which columns actually exist
+     * in the `items` table and map sensible fallbacks if the canonical column names
+     * (like `unit_cost`) are missing. This prevents SQL errors such as
+     * "Unknown column 'unit_cost'".
      */
     protected function fetchItemsForOptimization(): array
     {
-        $sql = "
-            SELECT
-                id AS item_id,
-                COALESCE(avg_daily_demand, 0) AS avg_daily_demand,
-                COALESCE(lead_time_days, 0)   AS lead_time_days,
-                COALESCE(unit_cost, 0)        AS unit_cost,
-                COALESCE(safety_stock, 0)     AS safety_stock,
-                COALESCE(order_cost, 50)      AS order_cost
-            FROM items
-            WHERE is_active = 1
-        ";
-        $stmt = $this->db->query($sql);
-        $rows = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
-        // Ensure numeric types
-        foreach ($rows as &$r) {
-            $r['item_id']          = (int)$r['item_id'];
-            $r['avg_daily_demand'] = (float)$r['avg_daily_demand'];
-            $r['lead_time_days']   = (float)$r['lead_time_days'];
-            $r['unit_cost']        = (float)$r['unit_cost'];
-            $r['safety_stock']     = (float)$r['safety_stock'];
-            $r['order_cost']       = (float)$r['order_cost'];
+        try {
+            // Discover available columns in `items`
+            $columns = $this->fetchTableColumns('items'); // returns array of column names
+            $colsLower = array_map('strtolower', $columns);
+
+            // Helper to choose the first existing column from a list of candidates.
+            $choose = function (array $candidates) use ($columns, $colsLower) : ?string {
+                foreach ($candidates as $cand) {
+                    $idx = array_search(strtolower($cand), $colsLower, true);
+                    if ($idx !== false) {
+                        return $columns[$idx]; // return original-case column name
+                    }
+                }
+                return null;
+            };
+
+            // Candidate mappings
+            $avgDailyCandidates = ['avg_daily_demand', 'avg_daily_usage', 'avg_demand', 'daily_demand', 'demand_avg', 'avg_daily'];
+            $leadTimeCandidates   = ['lead_time_days', 'lead_time', 'lt_days', 'leadtime_days'];
+            $unitCostCandidates   = ['unit_cost', 'unit_price', 'cost', 'price', 'avg_cost', 'avg_price'];
+            $safetyStockCandidates= ['safety_stock', 'safety_stock_qty', 'safety_qty', 'safety', 'ss'];
+            $orderCostCandidates  = ['order_cost', 'ordering_cost', 'order_fee', 'order_costs', 'setup_cost'];
+
+            $avgDailyCol = $choose($avgDailyCandidates);
+            $leadTimeCol = $choose($leadTimeCandidates);
+            $unitCostCol = $choose($unitCostCandidates);
+            $safetyStockCol = $choose($safetyStockCandidates);
+            $orderCostCol = $choose($orderCostCandidates);
+
+            // Build SELECT parts: if column exists use it, otherwise use literal defaults
+            $selectParts = [
+                "id AS item_id",
+                ($avgDailyCol ? "COALESCE(`{$avgDailyCol}`, 0) AS avg_daily_demand" : "0.0 AS avg_daily_demand"),
+                ($leadTimeCol ? "COALESCE(`{$leadTimeCol}`, 0) AS lead_time_days" : "0.0 AS lead_time_days"),
+                ($unitCostCol ? "COALESCE(`{$unitCostCol}`, 0) AS unit_cost" : "0.0 AS unit_cost"),
+                ($safetyStockCol ? "COALESCE(`{$safetyStockCol}`, 0) AS safety_stock" : "0.0 AS safety_stock"),
+                ($orderCostCol ? "COALESCE(`{$orderCostCol}`, 50) AS order_cost" : "50.0 AS order_cost"),
+            ];
+
+            $sql = "SELECT " . implode(",\n       ", $selectParts) . "\nFROM `items`\nWHERE is_active = 1";
+
+            $stmt = $this->db->query($sql);
+            if (!$stmt) {
+                $this->log_to_file("fetchItemsForOptimization: query failed. SQL: {$sql}");
+                return [];
+            }
+
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            // Ensure numeric types and canonical keys present
+            foreach ($rows as &$r) {
+                $r['item_id']          = isset($r['item_id']) ? (int)$r['item_id'] : 0;
+                $r['avg_daily_demand'] = isset($r['avg_daily_demand']) ? (float)$r['avg_daily_demand'] : 0.0;
+                $r['lead_time_days']   = isset($r['lead_time_days']) ? (float)$r['lead_time_days'] : 0.0;
+                $r['unit_cost']        = isset($r['unit_cost']) ? (float)$r['unit_cost'] : 0.0;
+                $r['safety_stock']     = isset($r['safety_stock']) ? (float)$r['safety_stock'] : 0.0;
+                $r['order_cost']       = isset($r['order_cost']) ? (float)$r['order_cost'] : 50.0;
+            }
+            unset($r);
+
+            return $rows;
+        } catch (\Throwable $t) {
+            $this->log_to_file("❌ fetchItemsForOptimization failed: " . $t->getMessage());
+            return [];
         }
-        return $rows;
     }
 
     /**
