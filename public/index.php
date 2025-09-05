@@ -20,8 +20,8 @@ if (session_status() === PHP_SESSION_NONE) {
 // ------------------------------------------------------------
 // Paths
 // ------------------------------------------------------------
-// InfinityFree serves from htdocs/, so project root = __DIR__
-define('PROJECT_ROOT', realpath(__DIR__));
+// InfinityFree serves from htdocs/, project root is one level above /public
+define('PROJECT_ROOT', realpath(__DIR__ . '/..'));
 define('APP_DIR',     PROJECT_ROOT . '/app');
 define('CONFIG_DIR',  PROJECT_ROOT . '/config');
 define('ROUTES_DIR',  PROJECT_ROOT . '/routes');
