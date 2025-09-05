@@ -1,4 +1,4 @@
-<?php   
+<?php    
 // File: routes/web.php
 
 declare(strict_types=1);
@@ -15,15 +15,12 @@ $router->add('GET', '/', function () {
     if (session_status() === PHP_SESSION_NONE) {
         session_start();
     }
+
     if (!isset($_SESSION['user_id'])) {
         redirect('/login');
     } else {
-        $uri = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
-        if ($uri !== '/dashboard') {
-            redirect('/dashboard');
-        } else {
-            (new DashboardController())->index();
-        }
+        // ✅ Always normalize to /dashboard (never /public/dashboard)
+        redirect('/dashboard');
     }
 });
 
