@@ -8,10 +8,10 @@ Options -MultiViews
     RewriteEngine On
 
     # ------------------------------------------------------------
-    # If URL contains /public at the start, remove it
-    # Example: /public/dashboard -> /dashboard
+    # Force redirect if someone tries /public/... in URL
+    # This ensures clean URLs without /public
     # ------------------------------------------------------------
-    RewriteCond %{REQUEST_URI} ^/public/(.*)$ [NC]
+    RewriteCond %{THE_REQUEST} \s/public/([^\s?]*) [NC]
     RewriteRule ^public/(.*)$ /$1 [L,R=301]
 
     # Serve existing files or directories as-is

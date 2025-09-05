@@ -1,7 +1,15 @@
-<!-- File: resources/views/stock/movements/entry.blade.php -->
+<?php
+// File: resources/views/stock/movements/entry.blade.php
+
+// ✅ Normalize BASE_PATH so it never includes '/public'
+$actionBase = rtrim(str_replace('/public', '', BASE_PATH), '/');
+?>
 <h2>New Stock Entry</h2>
 
-<form action="<?= BASE_PATH ?>/stock-movements/handle-entry" method="POST" class="needs-validation" novalidate>
+<form action="<?= htmlspecialchars($actionBase . '/stock-movements/handle-entry', ENT_QUOTES, 'UTF-8') ?>" 
+      method="POST" 
+      class="needs-validation" 
+      novalidate>
     <?= csrf_field() ?>
 
     <!-- Item -->
@@ -11,8 +19,8 @@
             <select name="item_id" id="item_id" class="form-control" required>
                 <option value="">-- Select Item --</option>
                 <?php foreach ($items as $item): ?>
-                    <option value="<?= $item['id']; ?>">
-                        <?= htmlspecialchars($item['name']); ?>
+                    <option value="<?= (int)$item['id']; ?>">
+                        <?= htmlspecialchars($item['name'], ENT_QUOTES, 'UTF-8'); ?>
                     </option>
                 <?php endforeach; ?>
             </select>
@@ -35,8 +43,8 @@
         <select name="supplier_id" id="supplier_id" class="form-control">
             <option value="">-- Select Existing Supplier --</option>
             <?php foreach ($suppliers as $supplier): ?>
-                <option value="<?= $supplier['id']; ?>">
-                    <?= htmlspecialchars($supplier['name']); ?>
+                <option value="<?= (int)$supplier['id']; ?>">
+                    <?= htmlspecialchars($supplier['name'], ENT_QUOTES, 'UTF-8'); ?>
                 </option>
             <?php endforeach; ?>
         </select>
@@ -51,8 +59,8 @@
         <select name="warehouse_id" id="warehouse_id" class="form-control" required>
             <option value="">-- Select Warehouse --</option>
             <?php foreach ($warehouses as $wh): ?>
-                <option value="<?= $wh['id']; ?>">
-                    <?= htmlspecialchars($wh['name']); ?>
+                <option value="<?= (int)$wh['id']; ?>">
+                    <?= htmlspecialchars($wh['name'], ENT_QUOTES, 'UTF-8'); ?>
                 </option>
             <?php endforeach; ?>
         </select>
@@ -61,7 +69,7 @@
     <button type="submit" class="btn btn-primary mt-3">Save Entry</button>
 </form>
 
-<script src="<?= BASE_PATH ?>/assets/js/barcode-scanner.js"></script>
+<script src="<?= htmlspecialchars($actionBase . '/assets/js/barcode-scanner.js', ENT_QUOTES, 'UTF-8') ?>"></script>
 <script>
     // Toggle barcode scanner
     const scanBtn = document.getElementById('scanBarcodeBtn');

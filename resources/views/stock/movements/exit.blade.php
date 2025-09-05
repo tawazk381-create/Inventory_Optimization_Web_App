@@ -1,7 +1,15 @@
-<!-- File: resources/views/stock/movements/exit.blade.php -->
+<?php
+// File: resources/views/stock/movements/exit.blade.php
+
+// ✅ Normalize BASE_PATH so it never includes '/public'
+$actionBase = rtrim(str_replace('/public', '', BASE_PATH), '/');
+?>
 <h2>Stock Exit</h2>
 
-<form action="<?= BASE_PATH ?>/stock-movements/handle-exit" method="POST" class="needs-validation" novalidate>
+<form action="<?= htmlspecialchars($actionBase . '/stock-movements/handle-exit', ENT_QUOTES, 'UTF-8') ?>" 
+      method="POST" 
+      class="needs-validation" 
+      novalidate>
     <?= csrf_field() ?>
 
     <!-- Item -->
@@ -10,8 +18,8 @@
         <select name="item_id" id="item_id" class="form-control" required>
             <option value="">-- Select Item --</option>
             <?php foreach ($items as $item): ?>
-                <option value="<?= $item['id']; ?>">
-                    <?= htmlspecialchars($item['sku'] . ' - ' . $item['name']); ?>
+                <option value="<?= (int)$item['id']; ?>">
+                    <?= htmlspecialchars($item['sku'] . ' - ' . $item['name'], ENT_QUOTES, 'UTF-8'); ?>
                 </option>
             <?php endforeach; ?>
         </select>
@@ -23,8 +31,8 @@
         <select name="warehouse_id" id="warehouse_id" class="form-control" required>
             <option value="">-- Select Warehouse --</option>
             <?php foreach ($warehouses as $warehouse): ?>
-                <option value="<?= $warehouse['id']; ?>">
-                    <?= htmlspecialchars($warehouse['name']); ?>
+                <option value="<?= (int)$warehouse['id']; ?>">
+                    <?= htmlspecialchars($warehouse['name'], ENT_QUOTES, 'UTF-8'); ?>
                 </option>
             <?php endforeach; ?>
         </select>
@@ -55,7 +63,7 @@ document.addEventListener("DOMContentLoaded", function () {
         }
         try {
             // 🔄 Call an endpoint that returns stock for item+warehouse
-            const resp = await fetch(`<?= BASE_PATH ?>/api/stock/check?item_id=${itemId}&warehouse_id=${whId}`);
+            const resp = await fetch("<?= htmlspecialchars($actionBase, ENT_QUOTES, 'UTF-8') ?>/api/stock/check?item_id=" + itemId + "&warehouse_id=" + whId);
             const data = await resp.json();
             if (data && typeof data.stock !== "undefined") {
                 hint.textContent = `Available stock in this warehouse: ${data.stock}`;

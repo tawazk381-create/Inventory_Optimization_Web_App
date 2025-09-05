@@ -14,13 +14,16 @@ $csrfToken = $_SESSION['csrf_token'];
 
 $roleName = $_SESSION['role_name'] ?? '';
 $currentUserId = $_SESSION['user_id'] ?? null;
+
+// ✅ Normalize BASE_PATH so it never includes '/public'
+$actionBase = rtrim(str_replace('/public', '', BASE_PATH), '/');
 ?>
 <div class="row">
     <div class="col-md-12">
         <div class="card shadow-sm">
             <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
                 <h4 class="mb-0">User Management</h4>
-                <a href="<?= BASE_PATH ?>/users/register" class="btn btn-light btn-sm">+ Add New User</a>
+                <a href="<?= htmlspecialchars($actionBase . '/users/register', ENT_QUOTES, 'UTF-8') ?>" class="btn btn-light btn-sm">+ Add New User</a>
             </div>
             <div class="card-body">
                 <?php if (!empty($users)): ?>
@@ -49,7 +52,7 @@ $currentUserId = $_SESSION['user_id'] ?? null;
                                                 <?php if ((int)$u['id'] === (int)$currentUserId): ?>
                                                     <em>Protected</em>
                                                 <?php else: ?>
-                                                    <form action="<?= BASE_PATH ?>/users/delete" 
+                                                    <form action="<?= htmlspecialchars($actionBase . '/users/delete', ENT_QUOTES, 'UTF-8') ?>" 
                                                           method="POST" 
                                                           onsubmit="return confirm('Are you sure you want to remove this user?');"
                                                           style="display:inline;">

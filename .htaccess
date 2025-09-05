@@ -6,6 +6,13 @@ Options -MultiViews
 <IfModule mod_rewrite.c>
     RewriteEngine On
 
+    # ------------------------------------------------------------
+    # Redirect direct access to /public/... → clean URL (no /public)
+    # Example: https://site.com/public/login → https://site.com/login
+    # ------------------------------------------------------------
+    RewriteCond %{THE_REQUEST} \s/public/([^\s?]*) [NC]
+    RewriteRule ^public/(.*)$ /$1 [L,R=301]
+
     # Serve existing files/directories as-is
     RewriteCond %{REQUEST_FILENAME} -f [OR]
     RewriteCond %{REQUEST_FILENAME} -d

@@ -1,16 +1,21 @@
-<!-- File: resources/views/stock/movements/adjustment.blade.php -->
+<?php
+// File: resources/views/stock/movements/adjustment.blade.php
 
-<?php if (session_status() === PHP_SESSION_NONE) session_start(); ?>
-<?php include __DIR__ . '/../../partials/nav.php'; ?>
-<?php include __DIR__ . '/../../partials/flash.php'; ?>
+if (session_status() === PHP_SESSION_NONE) session_start();
 
+// ✅ Normalize BASE_PATH so it never includes '/public'
+$actionBase = rtrim(str_replace('/public', '', BASE_PATH), '/');
+
+include __DIR__ . '/../../partials/nav.php';
+include __DIR__ . '/../../partials/flash.php';
+?>
 <div class="container mt-4">
     <h1 class="mb-4">🛠 Stock Adjustment & Item Update</h1>
 
     <!-- ========================= -->
     <!-- Item Details Update Form  -->
     <!-- ========================= -->
-    <form method="POST" action="<?= BASE_PATH ?>/stock-movements/handle-item-update">
+    <form method="POST" action="<?= htmlspecialchars($actionBase . '/stock-movements/handle-item-update', ENT_QUOTES, 'UTF-8') ?>">
         <?= csrf_field() ?>
 
         <!-- Item selector -->
@@ -19,16 +24,16 @@
             <select name="item_id" id="item_id" class="form-select" required>
                 <option value="">-- Select Item --</option>
                 <?php foreach ($items as $it): ?>
-                    <option value="<?= $it['id'] ?>"
-                            data-sku="<?= htmlspecialchars($it['sku']) ?>"
-                            data-name="<?= htmlspecialchars($it['name']) ?>"
-                            data-supplier="<?= htmlspecialchars($it['supplier_id'] ?? '') ?>"
-                            data-unit_price="<?= htmlspecialchars($it['unit_price'] ?? 0) ?>"
-                            data-demand="<?= htmlspecialchars($it['avg_daily_demand'] ?? 0) ?>"
-                            data-lead="<?= htmlspecialchars($it['lead_time_days'] ?? 0) ?>"
-                            data-safety="<?= htmlspecialchars($it['safety_stock'] ?? 0) ?>"
-                            data-reorder="<?= htmlspecialchars($it['reorder_point'] ?? 0) ?>">
-                        <?= htmlspecialchars($it['sku'] . ' — ' . $it['name']) ?>
+                    <option value="<?= (int)$it['id'] ?>"
+                            data-sku="<?= htmlspecialchars($it['sku'], ENT_QUOTES, 'UTF-8') ?>"
+                            data-name="<?= htmlspecialchars($it['name'], ENT_QUOTES, 'UTF-8') ?>"
+                            data-supplier="<?= htmlspecialchars($it['supplier_id'] ?? '', ENT_QUOTES, 'UTF-8') ?>"
+                            data-unit_price="<?= htmlspecialchars($it['unit_price'] ?? 0, ENT_QUOTES, 'UTF-8') ?>"
+                            data-demand="<?= htmlspecialchars($it['avg_daily_demand'] ?? 0, ENT_QUOTES, 'UTF-8') ?>"
+                            data-lead="<?= htmlspecialchars($it['lead_time_days'] ?? 0, ENT_QUOTES, 'UTF-8') ?>"
+                            data-safety="<?= htmlspecialchars($it['safety_stock'] ?? 0, ENT_QUOTES, 'UTF-8') ?>"
+                            data-reorder="<?= htmlspecialchars($it['reorder_point'] ?? 0, ENT_QUOTES, 'UTF-8') ?>">
+                        <?= htmlspecialchars($it['sku'] . ' — ' . $it['name'], ENT_QUOTES, 'UTF-8') ?>
                     </option>
                 <?php endforeach; ?>
             </select>
@@ -55,7 +60,7 @@
             <select name="supplier_id" id="supplier_id" class="form-select">
                 <option value="">-- Select Supplier --</option>
                 <?php foreach ((new Supplier())->all() as $sup): ?>
-                    <option value="<?= $sup['id'] ?>"><?= htmlspecialchars($sup['name']) ?></option>
+                    <option value="<?= (int)$sup['id'] ?>"><?= htmlspecialchars($sup['name'], ENT_QUOTES, 'UTF-8') ?></option>
                 <?php endforeach; ?>
             </select>
         </div>
@@ -101,7 +106,7 @@
     <!-- ========================= -->
     <!-- Stock Adjustment Form     -->
     <!-- ========================= -->
-    <form method="POST" action="<?= BASE_PATH ?>/stock-movements/handle-adjustment">
+    <form method="POST" action="<?= htmlspecialchars($actionBase . '/stock-movements/handle-adjustment', ENT_QUOTES, 'UTF-8') ?>">
         <?= csrf_field() ?>
 
         <h4>⚖️ Stock Adjustment</h4>
@@ -112,8 +117,8 @@
             <select name="item_id" id="adjust_item_id" class="form-select" required>
                 <option value="">-- Select Item --</option>
                 <?php foreach ($items as $it): ?>
-                    <option value="<?= $it['id'] ?>">
-                        <?= htmlspecialchars($it['sku'] . ' — ' . $it['name']) ?>
+                    <option value="<?= (int)$it['id'] ?>">
+                        <?= htmlspecialchars($it['sku'] . ' — ' . $it['name'], ENT_QUOTES, 'UTF-8') ?>
                     </option>
                 <?php endforeach; ?>
             </select>
@@ -125,7 +130,7 @@
             <select name="warehouse_id" id="warehouse_id" class="form-select" required>
                 <option value="">-- Select Warehouse --</option>
                 <?php foreach ($warehouses as $wh): ?>
-                    <option value="<?= $wh['id'] ?>"><?= htmlspecialchars($wh['name']) ?></option>
+                    <option value="<?= (int)$wh['id'] ?>"><?= htmlspecialchars($wh['name'], ENT_QUOTES, 'UTF-8') ?></option>
                 <?php endforeach; ?>
             </select>
         </div>
@@ -146,7 +151,7 @@
 
         <!-- Save Button -->
         <button type="submit" class="btn btn-warning">💾 Save Stock Adjustment</button>
-        <a href="<?= BASE_PATH ?>/stock-movements" class="btn btn-secondary">Cancel</a>
+        <a href="<?= htmlspecialchars($actionBase . '/stock-movements', ENT_QUOTES, 'UTF-8') ?>" class="btn btn-secondary">Cancel</a>
     </form>
 </div>
 

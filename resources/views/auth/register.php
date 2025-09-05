@@ -1,5 +1,8 @@
 <?php
 // File: resources/views/auth/register.php
+
+// ✅ Normalize BASE_PATH so it never includes '/public'
+$actionBase = rtrim(str_replace('/public', '', BASE_PATH), '/');
 ?>
 <div class="row justify-content-center">
     <div class="col-md-6">
@@ -8,7 +11,10 @@
                 <h4 class="mb-0">Register New User</h4>
             </div>
             <div class="card-body">
-                <form action="<?= BASE_PATH ?>/users/register" method="POST" class="needs-validation" novalidate>
+                <form action="<?= htmlspecialchars($actionBase . '/users/register', ENT_QUOTES, 'UTF-8') ?>" 
+                      method="POST" 
+                      class="needs-validation" 
+                      novalidate>
                     
                     <!-- ✅ CSRF token field -->
                     <?= csrf_field() ?>
@@ -51,7 +57,7 @@
                     </div>
 
                     <div class="d-flex justify-content-between">
-                        <a href="<?= BASE_PATH ?>/dashboard" class="btn btn-secondary">Cancel</a>
+                        <a href="<?= htmlspecialchars($actionBase . '/dashboard', ENT_QUOTES, 'UTF-8') ?>" class="btn btn-secondary">Cancel</a>
                         <button type="submit" class="btn btn-success">Register User</button>
                     </div>
                 </form>
@@ -60,4 +66,4 @@
     </div>
 </div>
 
-<script src="<?= BASE_PATH ?>/assets/js/form-validation.js"></script>
+<script src="<?= htmlspecialchars($actionBase . '/assets/js/form-validation.js', ENT_QUOTES, 'UTF-8') ?>"></script>

@@ -1,7 +1,7 @@
 <?php 
 // File: resources/views/auth/login.php
 
-// Normalize BASE_PATH so it never includes '/public'
+// ✅ Normalize BASE_PATH so it never includes '/public'
 $actionBase = rtrim(str_replace('/public', '', BASE_PATH), '/');
 ?>
 <div class="row justify-content-center">
@@ -10,8 +10,8 @@ $actionBase = rtrim(str_replace('/public', '', BASE_PATH), '/');
             <div class="card-body">
                 <h4 class="mb-3 text-center">Login</h4>
 
-                <form method="POST" 
-                      action="<?= htmlspecialchars($actionBase . '/login', ENT_QUOTES, 'UTF-8') ?>" 
+                <form method="POST"
+                      action="<?= htmlspecialchars($actionBase . '/login', ENT_QUOTES, 'UTF-8') ?>"
                       novalidate
                       class="needs-validation">
 
