@@ -7,6 +7,13 @@ Options -MultiViews
 <IfModule mod_rewrite.c>
     RewriteEngine On
 
+    # ------------------------------------------------------------
+    # If URL contains /public at the start, remove it
+    # Example: /public/dashboard -> /dashboard
+    # ------------------------------------------------------------
+    RewriteCond %{REQUEST_URI} ^/public/(.*)$ [NC]
+    RewriteRule ^public/(.*)$ /$1 [L,R=301]
+
     # Serve existing files or directories as-is
     RewriteCond %{REQUEST_FILENAME} -f [OR]
     RewriteCond %{REQUEST_FILENAME} -d
