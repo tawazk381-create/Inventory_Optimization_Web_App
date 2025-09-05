@@ -1,4 +1,4 @@
-<?php 
+<?php  
 // File: app/helpers/functions.php
 
 declare(strict_types=1);
@@ -42,28 +42,36 @@ function csrf_token(): string
     if (session_status() === PHP_SESSION_NONE) {
         session_start();
     }
+
     if (empty($_SESSION['csrf_token'])) {
         $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
     }
+
     return $_SESSION['csrf_token'];
 }
 
 function csrf_field(): string
 {
-    // ✅ Use consistent field name: csrf_token
+    // ✅ Consistent hidden input field
     return '<input type="hidden" name="csrf_token" value="' 
         . htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8') . '">';
 }
 
+/**
+ * Verify CSRF token for POST requests
+ */
 function verify_csrf(): void
 {
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (session_status() === PHP_SESSION_NONE) {
             session_start();
         }
-        $token = $_POST['csrf_token'] ?? '';
-        if (!$token || !hash_equals($_SESSION['csrf_token'] ?? '', $token)) {
-            http_response_code(419);
+
+        $token = $_POST['csrf_token'] ?? null;
+        $sessionToken = $_SESSION['csrf_token'] ?? null;
+
+        if (!$token || !$sessionToken || !hash_equals($sessionToken, (string)$token)) {
+            http_response_code(419); // Authentication Timeout
             echo "CSRF token mismatch.";
             exit;
         }

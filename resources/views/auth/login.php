@@ -1,4 +1,4 @@
-<?php
+<?php 
 // File: resources/views/auth/login.php
 
 // Normalize BASE_PATH so it never includes '/public'
@@ -8,8 +8,13 @@ $actionBase = rtrim(str_replace('/public', '', BASE_PATH), '/');
     <div class="col-md-5">
         <div class="card shadow-sm">
             <div class="card-body">
-                <form method="POST" action="<?= htmlspecialchars($actionBase . '/login', ENT_QUOTES, 'UTF-8') ?>">
-                    
+                <h4 class="mb-3 text-center">Login</h4>
+
+                <form method="POST" 
+                      action="<?= htmlspecialchars($actionBase . '/login', ENT_QUOTES, 'UTF-8') ?>" 
+                      novalidate
+                      class="needs-validation">
+
                     <!-- ✅ CSRF token field -->
                     <?= csrf_field() ?>
 
@@ -23,6 +28,7 @@ $actionBase = rtrim(str_replace('/public', '', BASE_PATH), '/');
                             required 
                             autofocus
                         >
+                        <div class="invalid-feedback">Please enter your email.</div>
                     </div>
 
                     <div class="form-group mb-3">
@@ -34,6 +40,7 @@ $actionBase = rtrim(str_replace('/public', '', BASE_PATH), '/');
                             class="form-control" 
                             required
                         >
+                        <div class="invalid-feedback">Please enter your password.</div>
                     </div>
 
                     <button type="submit" class="btn btn-success w-100">Login</button>
