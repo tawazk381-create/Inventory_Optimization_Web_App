@@ -1,4 +1,4 @@
-<?php
+<?php 
 // File: app/helpers/functions.php
 
 declare(strict_types=1);
@@ -50,7 +50,9 @@ function csrf_token(): string
 
 function csrf_field(): string
 {
-    return '<input type="hidden" name="_token" value="' . htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8') . '">';
+    // ✅ Use consistent field name: csrf_token
+    return '<input type="hidden" name="csrf_token" value="' 
+        . htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8') . '">';
 }
 
 function verify_csrf(): void
@@ -59,7 +61,7 @@ function verify_csrf(): void
         if (session_status() === PHP_SESSION_NONE) {
             session_start();
         }
-        $token = $_POST['_token'] ?? '';
+        $token = $_POST['csrf_token'] ?? '';
         if (!$token || !hash_equals($_SESSION['csrf_token'] ?? '', $token)) {
             http_response_code(419);
             echo "CSRF token mismatch.";

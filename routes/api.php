@@ -1,5 +1,27 @@
-<?php
+<?php 
 // File: routes/api.php
+
+// ------------------------------------------------------------
+// Helper: CSRF check for API (future POST/PUT/DELETE endpoints)
+// ------------------------------------------------------------
+function api_verify_csrf(): void
+{
+    if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
+        if (session_status() === PHP_SESSION_NONE) {
+            session_start();
+        }
+        $token = $_POST['csrf_token'] 
+            ?? $_SERVER['HTTP_X_CSRF_TOKEN'] 
+            ?? null;
+
+        if (!$token || !hash_equals($_SESSION['csrf_token'] ?? '', $token)) {
+            http_response_code(419);
+            header('Content-Type: application/json');
+            echo json_encode(['ok' => false, 'error' => 'CSRF token mismatch']);
+            exit;
+        }
+    }
+}
 
 // ----------------------
 // 📦 Items list
@@ -84,7 +106,12 @@ $router->add('GET', '/api/stock/check', function () {
         ]);
         $stock = (int)$stmt->fetchColumn();
 
-        echo json_encode(['ok' => true, 'item_id' => $itemId, 'warehouse_id' => $warehouseId, 'stock' => $stock]);
+        echo json_encode([
+            'ok' => true, 
+            'item_id' => $itemId, 
+            'warehouse_id' => $warehouseId, 
+            'stock' => $stock
+        ]);
     } catch (Exception $e) {
         http_response_code(500);
         echo json_encode(['ok' => false, 'error' => 'Server error']);

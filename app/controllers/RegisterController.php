@@ -37,8 +37,8 @@ class RegisterController extends Controller
             session_start();
         }
 
-        // ✅ Use global CSRF verifier
-        verify_csrf();
+        // ✅ Use base controller CSRF verifier
+        $this->verifyCsrfToken();
 
         global $DB;
 
@@ -122,8 +122,8 @@ class RegisterController extends Controller
             session_start();
         }
 
-        // ✅ Use global CSRF verifier
-        verify_csrf();
+        // ✅ Use base controller CSRF verifier
+        $this->verifyCsrfToken();
 
         $userModel = new User();
 

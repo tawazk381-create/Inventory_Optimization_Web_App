@@ -1,4 +1,4 @@
-<?php
+<?php 
 // File: app/core/Controller.php
 declare(strict_types=1);
 
@@ -102,5 +102,20 @@ class Controller
     protected function redirect(string $url)
     {
         redirect($url);
+    }
+
+    // ------------------------------------------------------------
+    // ✅ CSRF Protection
+    // ------------------------------------------------------------
+    protected function verifyCsrfToken(): void
+    {
+        $token = $_POST['csrf_token'] ?? null;
+        $valid = isset($_SESSION['csrf_token']) && hash_equals($_SESSION['csrf_token'], (string)$token);
+
+        if (!$valid) {
+            http_response_code(419); // 419 Authentication Timeout
+            echo "CSRF token mismatch.";
+            exit;
+        }
     }
 }

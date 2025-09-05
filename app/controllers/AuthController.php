@@ -35,8 +35,8 @@ class AuthController extends Controller
             session_start();
         }
 
-        // ✅ Use global CSRF verifier
-        verify_csrf();
+        // ✅ Use base controller CSRF verifier
+        $this->verifyCsrfToken();
 
         // Sanitize inputs
         $email    = filter_var(trim($_POST['email'] ?? ''), FILTER_SANITIZE_EMAIL);
@@ -91,7 +91,7 @@ class AuthController extends Controller
         $this->auth->logout();
 
         // ✅ Regenerate CSRF token after logout for safety
-        unset($_SESSION['_token']);
+        unset($_SESSION['csrf_token']); // match the session key from helpers.php
 
         redirect('/login');
     }

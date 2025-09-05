@@ -145,5 +145,30 @@ $username   = $_SESSION['user_name'] ?? 'User';
             <small>&copy; <?= date('Y') ?> Inventory Optimization Web App</small>
         </div>
     </footer>
+
+    <!-- ✅ CSRF-aware JavaScript for AJAX/Fetch -->
+    <script>
+    const CSRF_TOKEN = "<?= htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8') ?>";
+
+    // Wrapper for fetch() that auto-injects CSRF header
+    async function csrfFetch(url, options = {}) {
+        options.headers = options.headers || {};
+        options.headers['X-CSRF-TOKEN'] = CSRF_TOKEN;
+
+        if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData)) {
+            options.headers['Content-Type'] = 'application/json';
+            options.body = JSON.stringify(options.body);
+        }
+
+        return fetch(url, options);
+    }
+
+    // jQuery global CSRF header if jQuery is loaded
+    if (typeof jQuery !== 'undefined') {
+        $.ajaxSetup({
+            headers: { 'X-CSRF-TOKEN': CSRF_TOKEN }
+        });
+    }
+    </script>
 </body>
 </html>
