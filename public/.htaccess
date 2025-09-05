@@ -2,6 +2,7 @@
 
 # Disable directory listing
 Options -Indexes
+Options -MultiViews
 
 <IfModule mod_rewrite.c>
     RewriteEngine On
@@ -11,15 +12,15 @@ Options -Indexes
     RewriteCond %{REQUEST_FILENAME} -d
     RewriteRule ^ - [L]
 
-    # Route everything else to front controller
+    # Route everything else to the front controller
     RewriteRule ^ index.php [L,QSA]
 </IfModule>
 
-# Protect sensitive files
+# Protect sensitive files (.env, .git, .htaccess)
 <IfModule mod_authz_core.c>
-  <FilesMatch "^\.(env|git|htaccess)$">
-    Require all denied
-  </FilesMatch>
+    <FilesMatch "^\.(env|git|htaccess)$">
+        Require all denied
+    </FilesMatch>
 </IfModule>
 
 AddDefaultCharset utf-8

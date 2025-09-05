@@ -1,0 +1,18 @@
+# File: .htaccess (root: /htdocs)
+
+Options -Indexes
+Options -MultiViews
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Serve existing files/directories as-is
+    RewriteCond %{REQUEST_FILENAME} -f [OR]
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^ - [L]
+
+    # Route everything else to the public front controller
+    RewriteRule ^ public/index.php [L,QSA]
+</IfModule>
+
+AddDefaultCharset utf-8
