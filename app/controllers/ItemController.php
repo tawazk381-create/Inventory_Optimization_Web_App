@@ -2,7 +2,8 @@
 // File: app/controllers/ItemController.php
 // Updated: implement robust store() handling for both single AJAX row saves and batch paste,
 // with CSRF verification, supplier/warehouse resolution, useful JSON responses for AJAX,
-// and friendly flash+redirect for non-AJAX usage.
+// and friendly flash+redirect for non-AJAX usage. 
+// ✅ Fixed redirect paths (removed /public issue).
 
 class ItemController extends Controller
 {
@@ -10,6 +11,7 @@ class ItemController extends Controller
     protected $itemModel;
     protected $supplierModel;
     protected $warehouseModel;
+    protected string $base;
 
     public function __construct()
     {
@@ -19,9 +21,12 @@ class ItemController extends Controller
         $this->supplierModel = new Supplier();
         $this->warehouseModel = new Warehouse();
 
+        // ✅ Normalize BASE_PATH (strip /public)
+        $this->base = rtrim(str_replace('/public', '', BASE_PATH), '/');
+
         if (!$this->auth->check()) {
             if (php_sapi_name() !== 'cli') {
-                $this->redirect('/login');
+                $this->redirect($this->base . '/login');
                 exit;
             }
         }
@@ -78,7 +83,7 @@ class ItemController extends Controller
     public function store()
     {
         try {
-            // Verify CSRF - will throw/exit if invalid (consistent with app helpers)
+            // Verify CSRF - will throw/exit if invalid
             verify_csrf();
 
             // If a batch textarea was posted, handle batch import
@@ -94,57 +99,46 @@ class ItemController extends Controller
                     $line = trim($rawLine);
                     if ($line === '') continue;
 
-                    // Use str_getcsv to safely parse CSV (handles quoted cells, commas, tabs, etc.)
                     $cells = str_getcsv($line);
-                    // If only one cell and contains tabs, try splitting by tab
                     if (count($cells) === 1 && strpos($cells[0], "\t") !== false) {
                         $cells = explode("\t", $cells[0]);
                     }
 
-                    // Expected columns:
-                    // 0: SKU, 1: Name, 2: Supplier, 3: Unit Price, 4: Total Stock, 5: Warehouse, 6: Safety Stock, 7: Reorder Point
-                    // Tolerate shorter rows by filling missing with empty strings
                     for ($i = 0; $i < 8; $i++) {
                         $cells[$i] = isset($cells[$i]) ? trim($cells[$i]) : '';
                     }
 
-                    // Detect and skip header row if it looks like one
                     $firstLower = strtolower($cells[0]);
                     if (in_array($firstLower, ['sku', 'product', 'item', 'code', 'id'])) {
-                        // skip header row
-                        continue;
+                        continue; // skip header row
                     }
 
-                    $sku = $cells[0];
-                    $name = $cells[1];
-                    $supplierName = $cells[2];
-                    $unitPrice = $cells[3] !== '' ? (float)$cells[3] : 0.0;
-                    $totalStock = $cells[4] !== '' ? (int)$cells[4] : 0;
-                    $warehouseNameOrId = $cells[5];
-                    $safetyStock = $cells[6] !== '' ? (int)$cells[6] : 0;
-                    $reorderPoint = $cells[7] !== '' ? (int)$cells[7] : 0;
+                    $sku              = $cells[0];
+                    $name             = $cells[1];
+                    $supplierName     = $cells[2];
+                    $unitPrice        = $cells[3] !== '' ? (float)$cells[3] : 0.0;
+                    $totalStock       = $cells[4] !== '' ? (int)$cells[4] : 0;
+                    $warehouseNameOrId= $cells[5];
+                    $safetyStock      = $cells[6] !== '' ? (int)$cells[6] : 0;
+                    $reorderPoint     = $cells[7] !== '' ? (int)$cells[7] : 0;
 
-                    // Basic validation
                     if ($sku === '' || $name === '') {
                         $errors[] = "Line {$lineNo}: Missing SKU or Name.";
                         continue;
                     }
 
-                    // Resolve supplier (use existing or create)
+                    // Supplier resolution
                     $finalSupplierId = null;
                     if ($supplierName !== '') {
-                        // try findByName if available
                         if (method_exists($this->supplierModel, 'findByName')) {
                             $existing = $this->supplierModel->findByName($supplierName);
                         } else {
-                            // fallback generic finder
                             $existing = method_exists($this->supplierModel, 'find') ?
                                 $this->supplierModel->find(['name' => $supplierName]) : null;
                         }
                         if ($existing) {
                             $finalSupplierId = (int)$existing['id'];
                         } else {
-                            // create supplier
                             if (method_exists($this->supplierModel, 'create')) {
                                 $sid = $this->supplierModel->create(['name' => $supplierName]);
                                 $finalSupplierId = $sid ? (int)$sid : null;
@@ -152,7 +146,7 @@ class ItemController extends Controller
                         }
                     }
 
-                    // Resolve warehouse: allow either numeric id or name lookup
+                    // Warehouse resolution
                     $finalWarehouseId = null;
                     if ($warehouseNameOrId !== '') {
                         if (ctype_digit((string)$warehouseNameOrId)) {
@@ -173,7 +167,6 @@ class ItemController extends Controller
                         continue;
                     }
 
-                    // Prepare data for item creation
                     $itemData = [
                         'sku'           => $sku,
                         'name'          => $name,
@@ -185,15 +178,13 @@ class ItemController extends Controller
                         'reorder_point' => $reorderPoint
                     ];
 
-                    // Attempt to create item
                     try {
                         if (!method_exists($this->itemModel, 'create')) {
                             throw new \RuntimeException('Item model does not support create().');
                         }
                         $createdId = $this->itemModel->create($itemData);
                         if ($createdId === false || $createdId === null) {
-                            // likely duplicate SKU or other validation failure
-                            $errors[] = "Line {$lineNo}: Failed to create item (possible duplicate SKU or invalid data).";
+                            $errors[] = "Line {$lineNo}: Failed to create item (duplicate SKU or invalid data).";
                         } else {
                             $created[] = ['line' => $lineNo, 'id' => $createdId, 'sku' => $sku];
                         }
@@ -201,41 +192,37 @@ class ItemController extends Controller
                         error_log("Items batch create error on line {$lineNo}: " . $ie->getMessage());
                         $errors[] = "Line {$lineNo}: Server error while creating item.";
                     }
-                } // end foreach lines
+                }
 
-                // Return result depending on request type
                 if ($this->wantsJson()) {
                     header('Content-Type: application/json');
                     echo json_encode([
-                        'status' => empty($errors) ? 'success' : 'partial',
+                        'status'        => empty($errors) ? 'success' : 'partial',
                         'created_count' => count($created),
-                        'created' => $created,
-                        'errors' => $errors
+                        'created'       => $created,
+                        'errors'        => $errors
                     ]);
                     exit;
                 } else {
                     if (!empty($errors)) {
                         flash('error', 'Some rows failed to import. See server log or errors.');
-                        // store a nicer summary in session (optional)
                         flash('batch_import_summary', ['created' => $created, 'errors' => $errors]);
                     } else {
                         flash('success', 'Batch import completed. ' . count($created) . ' items created.');
                     }
-                    redirect('/items');
+                    redirect($this->base . '/items'); // ✅ fixed
                 }
-            } // end batch handling
+            }
 
-            // Otherwise handle single-item create (from table row / form)
-            // Accept both supplier_id OR supplier_name
-            $sku = isset($_POST['sku']) ? trim((string)$_POST['sku']) : '';
-            $name = isset($_POST['name']) ? trim((string)$_POST['name']) : '';
-            $supplierId = isset($_POST['supplier_id']) ? (int)$_POST['supplier_id'] : 0;
-            $supplierName = isset($_POST['supplier_name']) ? trim((string)$_POST['supplier_name']) : '';
-            $unitPrice = isset($_POST['unit_price']) ? (float)$_POST['unit_price'] : 0.0;
-            $totalStock = isset($_POST['total_stock']) ? (int)$_POST['total_stock'] : 0;
+            // Single-item create
+            $sku         = isset($_POST['sku']) ? trim((string)$_POST['sku']) : '';
+            $name        = isset($_POST['name']) ? trim((string)$_POST['name']) : '';
+            $supplierId  = isset($_POST['supplier_id']) ? (int)$_POST['supplier_id'] : 0;
+            $supplierName= isset($_POST['supplier_name']) ? trim((string)$_POST['supplier_name']) : '';
+            $unitPrice   = isset($_POST['unit_price']) ? (float)$_POST['unit_price'] : 0.0;
+            $totalStock  = isset($_POST['total_stock']) ? (int)$_POST['total_stock'] : 0;
             $warehouseId = isset($_POST['warehouse_id']) ? (int)$_POST['warehouse_id'] : 0;
 
-            // Basic validation
             if ($sku === '' || $name === '' || $unitPrice <= 0) {
                 return $this->respondError('Please provide SKU, Name and Unit Price.', 422);
             }
@@ -243,7 +230,6 @@ class ItemController extends Controller
                 return $this->respondError('Please select a valid warehouse.', 422);
             }
 
-            // Resolve supplier (prefer provided ID)
             $finalSupplierId = null;
             if ($supplierId > 0) {
                 $finalSupplierId = $supplierId;
@@ -264,14 +250,12 @@ class ItemController extends Controller
                 }
             }
 
-            // Verify warehouse exists (defensive)
             $warehouseOk = false;
             if ($warehouseId > 0) {
                 if (method_exists($this->warehouseModel, 'findById')) {
                     $w = $this->warehouseModel->findById($warehouseId);
                     $warehouseOk = (bool)$w;
                 } else {
-                    // best-effort: assume provided numeric ID is valid
                     $warehouseOk = true;
                 }
             }
@@ -279,17 +263,15 @@ class ItemController extends Controller
                 return $this->respondError('Selected warehouse not found.', 422);
             }
 
-            // Prepare create payload
             $createData = [
-                'sku' => $sku,
-                'name' => $name,
+                'sku'         => $sku,
+                'name'        => $name,
                 'supplier_id' => $finalSupplierId,
-                'unit_price' => $unitPrice,
+                'unit_price'  => $unitPrice,
                 'total_stock' => $totalStock,
-                'warehouse_id' => $warehouseId
+                'warehouse_id'=> $warehouseId
             ];
 
-            // Attempt to create item
             if (!method_exists($this->itemModel, 'create')) {
                 throw new \RuntimeException('Item model does not support create().');
             }
@@ -297,15 +279,12 @@ class ItemController extends Controller
             $newId = $this->itemModel->create($createData);
 
             if ($newId === false || $newId === null) {
-                // Could be duplicate SKU or validation failure
                 return $this->respondError('Failed to create item (SKU might already exist).', 409);
             }
 
-            // Success
             return $this->respondSuccess('Item created successfully.', ['id' => $newId]);
 
         } catch (\Throwable $e) {
-            // Log detailed error for server-side debugging
             error_log('ItemController::store error: ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
             return $this->handleException($e);
         }
@@ -361,7 +340,6 @@ class ItemController extends Controller
                 return $this->respondError('Invalid item data.');
             }
 
-            // Supplier resolution
             $finalSupplierId = null;
             if ($supplierId > 0) {
                 $finalSupplierId = $supplierId;
@@ -371,7 +349,6 @@ class ItemController extends Controller
                     : (int)$this->supplierModel->create(['name' => $supplierName]);
             }
 
-            // ✅ Include avg_daily_demand and lead_time_days in update
             $updateData = [
                 'sku'             => $sku,
                 'name'            => $name,
@@ -446,7 +423,7 @@ class ItemController extends Controller
             exit;
         } else {
             flash('success', $message);
-            redirect('/items');
+            redirect($this->base . '/items'); // ✅ fixed
         }
     }
 
@@ -459,7 +436,7 @@ class ItemController extends Controller
             exit;
         } else {
             flash('error', $message);
-            redirect('/items');
+            redirect($this->base . '/items'); // ✅ fixed
         }
     }
 

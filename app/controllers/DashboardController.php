@@ -7,6 +7,16 @@ require_once __DIR__ . '/../core/Controller.php';
 
 class DashboardController extends Controller
 {
+    protected string $base;
+
+    public function __construct()
+    {
+        parent::__construct();
+
+        // ✅ Normalize BASE_PATH (remove /public if present)
+        $this->base = rtrim(str_replace('/public', '', BASE_PATH), '/');
+    }
+
     public function index(): void
     {
         if (session_status() === PHP_SESSION_NONE) {
@@ -22,25 +32,25 @@ class DashboardController extends Controller
             $widgets[] = [
                 'title' => 'Items',
                 'desc'  => 'View and manage items',
-                'url'   => BASE_PATH . '/items',
+                'url'   => $this->base . '/items',
                 'icon'  => '📦'
             ];
             $widgets[] = [
                 'title' => 'Stock Entry',
                 'desc'  => 'Record stock manually or via scanner',
-                'url'   => BASE_PATH . '/items',
+                'url'   => $this->base . '/stock-movements/entry',
                 'icon'  => '📝'
             ];
             $widgets[] = [
                 'title' => 'Suppliers',
                 'desc'  => 'Manage supplier information',
-                'url'   => BASE_PATH . '/suppliers',
+                'url'   => $this->base . '/suppliers',
                 'icon'  => '🚚'
             ];
             $widgets[] = [
                 'title' => 'Warehouses',
                 'desc'  => 'View and manage warehouses',
-                'url'   => BASE_PATH . '/warehouses',
+                'url'   => $this->base . '/warehouses',
                 'icon'  => '🏭'
             ];
         }
@@ -50,19 +60,19 @@ class DashboardController extends Controller
             $widgets[] = [
                 'title' => 'Reports',
                 'desc'  => 'Generate inventory reports',
-                'url'   => BASE_PATH . '/reports',
+                'url'   => $this->base . '/reports',
                 'icon'  => '📊'
             ];
             $widgets[] = [
                 'title' => 'Optimization',
                 'desc'  => 'Run inventory optimization',
-                'url'   => BASE_PATH . '/optimizations/view',
+                'url'   => $this->base . '/optimizations/view',
                 'icon'  => '⚙️'
             ];
             $widgets[] = [
                 'title' => 'Classification',
                 'desc'  => 'ABC / XYZ classification',
-                'url'   => BASE_PATH . '/classification',
+                'url'   => $this->base . '/classification',
                 'icon'  => '📂'
             ];
         }
@@ -72,14 +82,13 @@ class DashboardController extends Controller
             $widgets[] = [
                 'title' => 'User Management',
                 'desc'  => 'Create and manage system users',
-                'url'   => BASE_PATH . '/users/register',
+                'url'   => $this->base . '/users/manage',
                 'icon'  => '👥'
             ];
         }
 
-        $title = "Dashboard - " . htmlspecialchars($role);
+        $title = "Dashboard - " . htmlspecialchars($role, ENT_QUOTES, 'UTF-8');
 
-        // ✅ Use Controller::view() instead of global render()
         $this->view('dashboard/index', compact('widgets', 'role', 'title'));
     }
 }
