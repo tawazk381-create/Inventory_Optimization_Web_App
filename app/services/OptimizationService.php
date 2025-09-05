@@ -7,6 +7,7 @@
 //   normalizes the response, writes results to DB, and updates the job record.
 // - This revision dynamically selects only columns that exist in the `items` table
 //   so the code won't attempt to SELECT non-existent columns (e.g. unit_cost).
+// - The `is_active` filter is now applied only if that column exists.
 
 declare(strict_types=1);
 
@@ -66,6 +67,7 @@ class OptimizationService
         // 1) Collect items to optimize
         $items = $this->fetchItemsForOptimization();
         if (empty($items)) {
+            $this->log_to_file("❌ Job {$jobId}: No items available to optimize.");
             $this->markJobFailed($jobId, 'No items available to optimize.');
             return;
         }
@@ -93,6 +95,7 @@ class OptimizationService
         // 4) Decode & normalize results
         $decoded = $response['json'];
         if (!is_array($decoded)) {
+            $this->log_to_file("❌ Job {$jobId}: Invalid JSON from remote API.");
             $this->markJobFailed($jobId, 'Invalid JSON from remote API.');
             return;
         }
@@ -120,11 +123,8 @@ class OptimizationService
     /**
      * Get items to send to Octave service.
      *
-     * This implementation dynamically picks only the columns that actually exist
-     * in the `items` table. It maps preferred names to aliases expected by Octave.
-     * If a preferred column doesn't exist in the schema, it's simply omitted.
-     *
-     * Returned rows will always include 'item_id' and any of the other aliases that exist.
+     * Dynamically picks only the columns that actually exist in the `items` table.
+     * Applies WHERE is_active=1 only if that column exists.
      */
     protected function fetchItemsForOptimization(): array
     {
@@ -140,7 +140,7 @@ class OptimizationService
 
         $existing = $this->fetchTableColumns('items');
         if (empty($existing)) {
-            // If DESCRIBE failed or table missing, return empty to avoid fatal queries.
+            $this->log_to_file("⚠️ OptimizationService: DESCRIBE items returned no columns.");
             return [];
         }
 
@@ -157,33 +157,32 @@ class OptimizationService
                 continue;
             }
             if ($col === 'order_cost') {
-                // keep previous default fallback of 50 when the column exists but is NULL
                 $selectParts[] = "COALESCE(`{$col}`, 50) AS `{$alias}`";
                 continue;
             }
 
-            // numeric columns default to 0 to keep API payload consistent
             $selectParts[] = "COALESCE(`{$col}`, 0) AS `{$alias}`";
         }
 
-        // Ensure we at least selected id
         if (empty($selectParts) || !in_array("`id` AS `item_id`", $selectParts, true)) {
-            // If id is missing, we cannot proceed safely.
-            $this->log_to_file("OptimizationService: fetchItemsForOptimization aborted - `id` column missing from items table.");
+            $this->log_to_file("⚠️ OptimizationService: items.id missing, cannot fetch items.");
             return [];
         }
 
-        $sql = "SELECT " . implode(",\n       ", $selectParts) . "\nFROM `items`\nWHERE `is_active` = 1";
+        // Add WHERE clause only if is_active exists
+        $where = in_array('is_active', $existing, true) ? "WHERE `is_active` = 1" : "";
+
+        $sql = "SELECT " . implode(",\n       ", $selectParts) . "\nFROM `items` {$where}";
 
         try {
             $stmt = $this->db->query($sql);
             $rows = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
         } catch (\Throwable $t) {
-            $this->log_to_file("OptimizationService: fetchItemsForOptimization query failed: " . $t->getMessage());
+            $this->log_to_file("❌ OptimizationService: fetchItemsForOptimization query failed: " . $t->getMessage());
             return [];
         }
 
-        // Ensure numeric types only for keys that are present in each row
+        // Ensure numeric types only for keys that are present
         foreach ($rows as &$r) {
             if (isset($r['item_id'])) {
                 $r['item_id'] = (int)$r['item_id'];
@@ -206,12 +205,12 @@ class OptimizationService
         }
         unset($r);
 
+        $this->log_to_file("OptimizationService: fetched " . count($rows) . " items for optimization.");
         return $rows;
     }
 
     /**
      * POST JSON to the remote Octave API.
-     * Returns ['ok'=>bool, 'json'=>mixed, 'status'=>int|null, 'error'=>string|null]
      */
     protected function postJson(string $url, array $data, int $timeoutSeconds = 60): array
     {
@@ -253,7 +252,6 @@ class OptimizationService
 
     /**
      * Save results into optimization_results inside a transaction.
-     * Returns how many rows were saved.
      */
     protected function saveOptimizationResults(int $jobId, array $results): int
     {
@@ -266,7 +264,6 @@ class OptimizationService
                 if (!isset($r['item_id']) || (int)$r['item_id'] <= 0) {
                     continue;
                 }
-                // Model’s interface expects a single row at a time.
                 $this->resultModel->saveResults($jobId, $r);
                 $count++;
             }
@@ -337,12 +334,8 @@ class OptimizationService
         }
     }
 
-    /**
-     * Normalization helpers (tolerant to slightly different keys from Octave service).
-     */
     protected function normalize_result_row(array $row): ?array
     {
-        // Accept item_id or id
         if (isset($row['item_id'])) {
             $itemId = (int)$row['item_id'];
         } elseif (isset($row['id'])) {
@@ -371,7 +364,6 @@ class OptimizationService
 
     protected function normalize_results_payload($decoded): array
     {
-        // Allow either {"results":[...]} or just [...]
         if (is_array($decoded) && isset($decoded['results']) && is_array($decoded['results'])) {
             $decoded = $decoded['results'];
         }
@@ -395,9 +387,8 @@ class OptimizationService
         return $out;
     }
 
-    /**
-     * Job status helpers
-     */
+    // Job status helpers
+
     public function markJobRunning(int $jobId): void
     {
         $stmt = $this->db->prepare("
@@ -505,9 +496,8 @@ class OptimizationService
         return $row ? (int)$row['id'] : null;
     }
 
-    /**
-     * Very small logging helper (storage/logs/optimization_service.log)
-     */
+    // Logging helper
+
     protected function log_to_file(string $message): void
     {
         $root = dirname(__DIR__, 2);
@@ -515,7 +505,6 @@ class OptimizationService
         if (!is_dir($dir)) @mkdir($dir, 0777, true);
         $file = $dir . '/optimization_service.log';
 
-        // Simple rotation at ~5MB
         if (file_exists($file) && filesize($file) > 5 * 1024 * 1024) {
             $ts = date('Ymd-His');
             @rename($file, $dir . "/optimization_service.log.$ts");
