@@ -1,4 +1,4 @@
-<?php
+<?php 
 // File: public/index.php
 declare(strict_types=1);
 
@@ -9,12 +9,17 @@ ini_set('display_errors', '1');
 ini_set('display_startup_errors', '1');
 error_reporting(E_ALL);
 
-if (session_status() === PHP_SESSION_NONE) {
-    session_start([
-        'cookie_httponly' => true,
-        'cookie_samesite' => 'Strict',
-        'cookie_secure'   => !empty($_SERVER['HTTPS']),
+// ------------------------------------------------------------
+// Session setup (unified with helpers.php)
+// ------------------------------------------------------------
+if (session_status() !== PHP_SESSION_ACTIVE) {
+    session_name('INVOPTSESSID'); // custom session name avoids clashes on shared hosting
+    session_set_cookie_params([
+        'httponly' => true,
+        'samesite' => 'Lax', // ✅ allow session across login POST/redirects
+        'secure'   => (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off'),
     ]);
+    session_start();
 }
 
 // ------------------------------------------------------------

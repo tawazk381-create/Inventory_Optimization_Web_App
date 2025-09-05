@@ -1,7 +1,23 @@
-<?php  
+<?php   
 // File: app/helpers/functions.php
 
 declare(strict_types=1);
+
+/**
+ * Ensure session is started with consistent settings
+ */
+function ensure_session(): void
+{
+    if (session_status() !== PHP_SESSION_ACTIVE) {
+        session_name('INVOPTSESSID'); // ✅ same name as in public/index.php
+        session_set_cookie_params([
+            'httponly' => true,
+            'samesite' => 'Lax', // ✅ allows login POST/redirects
+            'secure'   => (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off'),
+        ]);
+        session_start();
+    }
+}
 
 /**
  * Generate a full URL based on BASE_PATH
@@ -39,9 +55,7 @@ function redirect(string $url): void
  */
 function csrf_token(): string
 {
-    if (session_status() === PHP_SESSION_NONE) {
-        session_start();
-    }
+    ensure_session();
 
     if (empty($_SESSION['csrf_token'])) {
         $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
@@ -63,9 +77,7 @@ function csrf_field(): string
 function verify_csrf(): void
 {
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-        if (session_status() === PHP_SESSION_NONE) {
-            session_start();
-        }
+        ensure_session();
 
         $token = $_POST['csrf_token'] ?? null;
         $sessionToken = $_SESSION['csrf_token'] ?? null;
@@ -83,9 +95,7 @@ function verify_csrf(): void
  */
 function flash(string $key, string $message = null)
 {
-    if (session_status() === PHP_SESSION_NONE) {
-        session_start();
-    }
+    ensure_session();
 
     if ($message === null) {
         $msg = $_SESSION['flash'][$key] ?? null;
