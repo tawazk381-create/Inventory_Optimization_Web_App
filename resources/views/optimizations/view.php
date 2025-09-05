@@ -8,6 +8,9 @@ if (session_status() === PHP_SESSION_NONE) {
 $jobId   = (int)($job['id'] ?? 0);
 $status  = $job['status'] ?? 'unknown';
 $results = $results ?? [];
+
+// ✅ Normalize BASE_PATH so it never includes '/public'
+$actionBase = rtrim(str_replace('/public', '', BASE_PATH), '/');
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -15,7 +18,7 @@ $results = $results ?? [];
   <meta charset="UTF-8">
   <title>Optimization Job #<?= $jobId ?> — Inventory Optimization</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link href="<?= BASE_PATH ?>/assets/css/app.css" rel="stylesheet">
+  <link href="<?= htmlspecialchars($actionBase . '/assets/css/app.css', ENT_QUOTES, 'UTF-8') ?>" rel="stylesheet">
   <style>
     .progress { height: 20px; }
     .progress-bar { font-size: 12px; line-height: 20px; }
@@ -31,7 +34,7 @@ $results = $results ?? [];
 
   <div id="statusCard" class="card mb-3">
     <div class="card-body">
-      <p id="statusText">Status: <?= htmlspecialchars($status) ?></p>
+      <p id="statusText">Status: <?= htmlspecialchars($status, ENT_QUOTES, 'UTF-8') ?></p>
       <div id="progressWrapper" style="<?= ($status === 'complete' || $status === 'failed') ? 'display:none;' : '' ?>">
         <div id="progressCounts" class="mb-1 text-muted"></div>
         <div class="progress">
@@ -60,11 +63,11 @@ $results = $results ?? [];
         <?php if (!empty($results)): ?>
           <?php foreach ($results as $r): ?>
             <tr>
-              <td><?= htmlspecialchars($r['item_id']) ?></td>
-              <td><?= htmlspecialchars($r['item_name'] ?? '') ?></td>
-              <td><?= htmlspecialchars($r['eoq']) ?></td>
-              <td><?= htmlspecialchars($r['reorder_point']) ?></td>
-              <td><?= htmlspecialchars($r['safety_stock']) ?></td>
+              <td><?= htmlspecialchars($r['item_id'], ENT_QUOTES, 'UTF-8') ?></td>
+              <td><?= htmlspecialchars($r['item_name'] ?? '', ENT_QUOTES, 'UTF-8') ?></td>
+              <td><?= htmlspecialchars($r['eoq'], ENT_QUOTES, 'UTF-8') ?></td>
+              <td><?= htmlspecialchars($r['reorder_point'], ENT_QUOTES, 'UTF-8') ?></td>
+              <td><?= htmlspecialchars($r['safety_stock'], ENT_QUOTES, 'UTF-8') ?></td>
             </tr>
           <?php endforeach; ?>
         <?php endif; ?>
@@ -72,14 +75,14 @@ $results = $results ?? [];
     </table>
 
     <div class="mt-3">
-      <a href="<?= BASE_PATH ?>/optimizations/download-report?job=<?= $jobId ?>" class="btn btn-primary">
+      <a href="<?= htmlspecialchars($actionBase . '/optimizations/download-report?job=' . $jobId, ENT_QUOTES, 'UTF-8') ?>" class="btn btn-primary">
         ⬇ Download CSV Report
       </a>
     </div>
   </div>
 
   <div class="mt-3">
-    <a href="<?= BASE_PATH ?>/optimizations" class="btn btn-secondary">← Back to Jobs</a>
+    <a href="<?= htmlspecialchars($actionBase . '/optimizations', ENT_QUOTES, 'UTF-8') ?>" class="btn btn-secondary">← Back to Jobs</a>
   </div>
 </main>
 
@@ -96,7 +99,7 @@ $results = $results ?? [];
     const resultsTableBody = document.getElementById('resultsTableBody');
 
     function fetchJob() {
-        fetch('<?= BASE_PATH ?>/optimizations/job-json?job=' + jobId)
+        fetch('<?= $actionBase ?>/optimizations/job-json?job=' + jobId)
           .then(r => r.json())
           .then(j => {
               if (!j || !j.status) {

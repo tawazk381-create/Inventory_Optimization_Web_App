@@ -1,6 +1,9 @@
 <?php 
 // File: resources/views/reports/index.php
 if (session_status() === PHP_SESSION_NONE) session_start();
+
+// ✅ Normalize BASE_PATH so it never includes '/public'
+$actionBase = rtrim(str_replace('/public', '', BASE_PATH), '/');
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -8,8 +11,8 @@ if (session_status() === PHP_SESSION_NONE) session_start();
   <meta charset="UTF-8">
   <title>Reports — Inventory Optimization</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link href="<?= BASE_PATH ?>/assets/css/app.css" rel="stylesheet">
-  <script src="<?= BASE_PATH ?>/assets/js/reports.js"></script>
+  <link href="<?= htmlspecialchars($actionBase . '/assets/css/app.css', ENT_QUOTES, 'UTF-8') ?>" rel="stylesheet">
+  <script src="<?= htmlspecialchars($actionBase . '/assets/js/reports.js', ENT_QUOTES, 'UTF-8') ?>"></script>
 </head>
 <body>
 
@@ -38,8 +41,8 @@ if (session_status() === PHP_SESSION_NONE) session_start();
         <tbody>
           <?php foreach ($lowStock as $item): ?>
             <tr>
-              <td><?= htmlspecialchars($item['sku']) ?></td>
-              <td><?= htmlspecialchars($item['name']) ?></td>
+              <td><?= htmlspecialchars($item['sku'], ENT_QUOTES, 'UTF-8') ?></td>
+              <td><?= htmlspecialchars($item['name'], ENT_QUOTES, 'UTF-8') ?></td>
               <td><?= (int)$item['current_stock'] ?></td>
               <td><?= (int)$item['safety_stock'] ?></td>
             </tr>
@@ -71,8 +74,8 @@ if (session_status() === PHP_SESSION_NONE) session_start();
           <?php foreach ($optimizationResults as $res): ?>
             <tr>
               <td><?= (int)$res['item_id'] ?></td>
-              <td><?= htmlspecialchars($res['sku']) ?></td>
-              <td><?= htmlspecialchars($res['name']) ?></td>
+              <td><?= htmlspecialchars($res['sku'], ENT_QUOTES, 'UTF-8') ?></td>
+              <td><?= htmlspecialchars($res['name'], ENT_QUOTES, 'UTF-8') ?></td>
               <td><?= (int)$res['eoq'] ?></td>
               <td><?= (int)$res['reorder_point'] ?></td>
               <td><?= (int)$res['safety_stock'] ?></td>
@@ -104,12 +107,12 @@ if (session_status() === PHP_SESSION_NONE) session_start();
         <tbody>
           <?php foreach ($movements as $mv): ?>
             <tr>
-              <td><?= htmlspecialchars($mv['created_at']) ?></td>
-              <td><?= htmlspecialchars($mv['sku']) ?></td>
-              <td><?= htmlspecialchars($mv['name']) ?></td>
-              <td><?= htmlspecialchars($mv['movement_type']) ?></td>
+              <td><?= htmlspecialchars($mv['created_at'], ENT_QUOTES, 'UTF-8') ?></td>
+              <td><?= htmlspecialchars($mv['sku'], ENT_QUOTES, 'UTF-8') ?></td>
+              <td><?= htmlspecialchars($mv['name'], ENT_QUOTES, 'UTF-8') ?></td>
+              <td><?= htmlspecialchars($mv['movement_type'], ENT_QUOTES, 'UTF-8') ?></td>
               <td><?= (int)$mv['quantity'] ?></td>
-              <td><?= htmlspecialchars($mv['reference'] ?? '') ?></td>
+              <td><?= htmlspecialchars($mv['reference'] ?? '', ENT_QUOTES, 'UTF-8') ?></td>
             </tr>
           <?php endforeach; ?>
         </tbody>
