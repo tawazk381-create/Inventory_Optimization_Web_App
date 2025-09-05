@@ -24,16 +24,15 @@ jobs:
             
             # ⚠️ Cleanup: delete everything inside htdocs/
             rm -r /htdocs/*
-            
-            # Upload public into htdocs/
-            mirror -R ./public /htdocs
 
-            # Upload backend
-            mirror -R ./app /htdocs/app
-            mirror -R ./config /htdocs/config
-            mirror -R ./routes /htdocs/routes
-            mirror -R ./resources /htdocs/resources
-            mirror -R ./database /htdocs/database
+            # ✅ Mirror the entire repo root into htdocs
+            mirror -R ./ /htdocs \
+              --ignore-time \
+              --parallel=2 \
+              --exclude .git/ \
+              --exclude .github/ \
+              --exclude README.md \
+              --exclude LICENSE
 
             bye
           "
