@@ -5,6 +5,8 @@
 // - This version no longer shells out to octave-cli (InfinityFree restriction).
 // - It collects items from MySQL, posts them as JSON to OCTAVE_API_URL (/run),
 //   normalizes the response, writes results to DB, and updates the job record.
+// - This revision dynamically selects only columns that exist in the `items` table
+//   so the code won't attempt to SELECT non-existent columns (e.g. unit_cost).
 
 declare(strict_types=1);
 
@@ -117,33 +119,93 @@ class OptimizationService
 
     /**
      * Get items to send to Octave service.
-     * Adjust/extend the select to match what your Octave container expects.
      *
-     * NOTE: removed `unit_cost` to match the current database schema.
+     * This implementation dynamically picks only the columns that actually exist
+     * in the `items` table. It maps preferred names to aliases expected by Octave.
+     * If a preferred column doesn't exist in the schema, it's simply omitted.
+     *
+     * Returned rows will always include 'item_id' and any of the other aliases that exist.
      */
     protected function fetchItemsForOptimization(): array
     {
-        $sql = "
-            SELECT
-                id AS item_id,
-                COALESCE(avg_daily_demand, 0) AS avg_daily_demand,
-                COALESCE(lead_time_days, 0)   AS lead_time_days,
-                COALESCE(safety_stock, 0)     AS safety_stock,
-                COALESCE(order_cost, 50)      AS order_cost
-            FROM items
-            WHERE is_active = 1
-        ";
-        $stmt = $this->db->query($sql);
-        $rows = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
-        // Ensure numeric types
-        foreach ($rows as &$r) {
-            $r['item_id']          = (int)$r['item_id'];
-            $r['avg_daily_demand'] = (float)$r['avg_daily_demand'];
-            $r['lead_time_days']   = (float)$r['lead_time_days'];
-            // removed unit_cost casting (column not present in DB)
-            $r['safety_stock']     = (float)$r['safety_stock'];
-            $r['order_cost']       = (float)$r['order_cost'];
+        // Preferred column => alias in result
+        $preferred = [
+            'id'               => 'item_id',         // REQUIRED
+            'avg_daily_demand' => 'avg_daily_demand',
+            'lead_time_days'   => 'lead_time_days',
+            'unit_cost'        => 'unit_cost',       // removed automatically if not present
+            'safety_stock'     => 'safety_stock',
+            'order_cost'       => 'order_cost',
+        ];
+
+        $existing = $this->fetchTableColumns('items');
+        if (empty($existing)) {
+            // If DESCRIBE failed or table missing, return empty to avoid fatal queries.
+            return [];
         }
+
+        // Build SELECT parts only for columns that exist
+        $selectParts = [];
+        foreach ($preferred as $col => $alias) {
+            if (!in_array($col, $existing, true)) {
+                continue;
+            }
+
+            // Special handling/defaults
+            if ($col === 'id') {
+                $selectParts[] = "`id` AS `item_id`";
+                continue;
+            }
+            if ($col === 'order_cost') {
+                // keep previous default fallback of 50 when the column exists but is NULL
+                $selectParts[] = "COALESCE(`{$col}`, 50) AS `{$alias}`";
+                continue;
+            }
+
+            // numeric columns default to 0 to keep API payload consistent
+            $selectParts[] = "COALESCE(`{$col}`, 0) AS `{$alias}`";
+        }
+
+        // Ensure we at least selected id
+        if (empty($selectParts) || !in_array("`id` AS `item_id`", $selectParts, true)) {
+            // If id is missing, we cannot proceed safely.
+            $this->log_to_file("OptimizationService: fetchItemsForOptimization aborted - `id` column missing from items table.");
+            return [];
+        }
+
+        $sql = "SELECT " . implode(",\n       ", $selectParts) . "\nFROM `items`\nWHERE `is_active` = 1";
+
+        try {
+            $stmt = $this->db->query($sql);
+            $rows = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+        } catch (\Throwable $t) {
+            $this->log_to_file("OptimizationService: fetchItemsForOptimization query failed: " . $t->getMessage());
+            return [];
+        }
+
+        // Ensure numeric types only for keys that are present in each row
+        foreach ($rows as &$r) {
+            if (isset($r['item_id'])) {
+                $r['item_id'] = (int)$r['item_id'];
+            }
+            if (isset($r['avg_daily_demand'])) {
+                $r['avg_daily_demand'] = (float)$r['avg_daily_demand'];
+            }
+            if (isset($r['lead_time_days'])) {
+                $r['lead_time_days'] = (float)$r['lead_time_days'];
+            }
+            if (isset($r['unit_cost'])) {
+                $r['unit_cost'] = (float)$r['unit_cost'];
+            }
+            if (isset($r['safety_stock'])) {
+                $r['safety_stock'] = (float)$r['safety_stock'];
+            }
+            if (isset($r['order_cost'])) {
+                $r['order_cost'] = (float)$r['order_cost'];
+            }
+        }
+        unset($r);
+
         return $rows;
     }
 
@@ -268,7 +330,7 @@ class OptimizationService
     protected function fetchTableColumns(string $table): array
     {
         try {
-            $stmt = $this->db->query("DESCRIBE `$table`");
+            $stmt = $this->db->query("DESCRIBE `" . str_replace('`', '', $table) . "`");
             return $stmt ? $stmt->fetchAll(PDO::FETCH_COLUMN, 0) : [];
         } catch (\Throwable $t) {
             return [];
