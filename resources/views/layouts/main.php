@@ -8,6 +8,9 @@ $auth = new Auth();
 $isLoggedIn = $auth->check();
 $roleName   = $_SESSION['role_name'] ?? '';
 $username   = $_SESSION['user_name'] ?? 'User';
+
+// ✅ Normalize BASE_PATH so it never contains "/public"
+$base = rtrim(str_replace('/public', '', BASE_PATH), '/');
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -69,34 +72,34 @@ $username   = $_SESSION['user_name'] ?? 'User';
             <div class="container nav-inner">
                 <div class="nav-left">
                     <?php if ($isLoggedIn): ?>
-                        <a href="<?= BASE_PATH ?>/dashboard">Dashboard</a>
-                        <a href="<?= BASE_PATH ?>/items">Items</a>
-                        <a href="<?= BASE_PATH ?>/warehouses">Warehouses</a>
-                        <a href="<?= BASE_PATH ?>/suppliers">Suppliers</a>
+                        <a href="<?= $base ?>/dashboard">Dashboard</a>
+                        <a href="<?= $base ?>/items">Items</a>
+                        <a href="<?= $base ?>/warehouses">Warehouses</a>
+                        <a href="<?= $base ?>/suppliers">Suppliers</a>
 
                         <!-- Stock Movements dropdown -->
                         <div class="dropdown">
-                            <a href="<?= BASE_PATH ?>/stock-movements" class="dropdown-toggle">Stock Movements</a>
+                            <a href="<?= $base ?>/stock-movements" class="dropdown-toggle">Stock Movements</a>
                             <div class="dropdown-menu">
-                                <a href="<?= BASE_PATH ?>/stock-movements/entry">Stock Entry</a>
-                                <a href="<?= BASE_PATH ?>/stock-movements/exit">Stock Exit</a>
-                                <a href="<?= BASE_PATH ?>/stock-movements/transfer">Stock Transfer</a>
-                                <a href="<?= BASE_PATH ?>/stock-movements/adjustment">Stock Adjustment</a>
+                                <a href="<?= $base ?>/stock-movements/entry">Stock Entry</a>
+                                <a href="<?= $base ?>/stock-movements/exit">Stock Exit</a>
+                                <a href="<?= $base ?>/stock-movements/transfer">Stock Transfer</a>
+                                <a href="<?= $base ?>/stock-movements/adjustment">Stock Adjustment</a>
                             </div>
                         </div>
 
                         <?php if (in_array($roleName, ['Manager','Admin'], true)): ?>
-                            <a href="<?= BASE_PATH ?>/reports">Reports</a>
-                            <a href="<?= BASE_PATH ?>/optimizations/view">Optimizations</a>
-                            <a href="<?= BASE_PATH ?>/classification">Classification</a>
+                            <a href="<?= $base ?>/reports">Reports</a>
+                            <a href="<?= $base ?>/optimizations/view">Optimizations</a>
+                            <a href="<?= $base ?>/classification">Classification</a>
                         <?php endif; ?>
 
                         <?php if ($roleName === 'Admin'): ?>
-                            <a href="<?= BASE_PATH ?>/users/manage">User Management</a>
+                            <a href="<?= $base ?>/users/manage">User Management</a>
                         <?php endif; ?>
                     <?php else: ?>
                         <!-- Only show Login when NOT logged in -->
-                        <a href="<?= BASE_PATH ?>/login">Login</a>
+                        <a href="<?= $base ?>/login">Login</a>
                     <?php endif; ?>
                 </div>
 
@@ -106,7 +109,7 @@ $username   = $_SESSION['user_name'] ?? 'User';
                             <?= htmlspecialchars($username, ENT_QUOTES, 'UTF-8') ?>
                             (<?= htmlspecialchars($roleName ?: 'User', ENT_QUOTES, 'UTF-8') ?>)
                         </span>
-                        <a href="<?= BASE_PATH ?>/logout" title="Logout">Logout</a>
+                        <a href="<?= $base ?>/logout" title="Logout">Logout</a>
                     <?php endif; ?>
                 </div>
             </div>
