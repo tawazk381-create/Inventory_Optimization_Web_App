@@ -13,31 +13,24 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v2
 
-      - name: Install FTP client
-        run: sudo apt-get update && sudo apt-get install -y lftp
+      - name: Install FTP Deploy
+        run: |
+          sudo apt-get update && sudo apt-get install -y lftp
 
       - name: Deploy to InfinityFree
+        run: |
+          lftp -e "
+            set ftp:ssl-allow no;
+            open -u ${{ secrets.FTP_USERNAME }},${{ secrets.FTP_PASSWORD}} ftp://ftpupload.net;
+            
+            # ⚠️ Cleanup existing files
+            rm -r /htdocs/*;
+
+            # ✅ Upload entire project root into htdocs
+            mirror -R ./ /htdocs;
+
+            bye
+          "
         env:
           FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
           FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
-        run: |
-          lftp -u "$FTP_USERNAME","$FTP_PASSWORD" ftp://ftpupload.net <<EOF
-          set ftp:ssl-allow no
-          set xfer:clobber on
-          set net:timeout 20
-          set net:max-retries 2
-
-          # ⚠️ Cleanup
-          rm -r /htdocs/*
-
-          # ✅ Upload everything from repo root → htdocs
-          mirror -R ./ /htdocs \
-            --ignore-time \
-            --parallel=2 \
-            --exclude-glob .git* \
-            --exclude-glob .github* \
-            --exclude README.md \
-            --exclude LICENSE
-
-          bye
-          EOF
