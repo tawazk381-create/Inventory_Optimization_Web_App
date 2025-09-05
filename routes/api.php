@@ -2,7 +2,7 @@
 // File: routes/api.php
 
 // ------------------------------------------------------------
-// Helper: CSRF check for API (future POST/PUT/DELETE endpoints)
+// Helper: CSRF check for API (applies to POST/PUT/DELETE)
 // ------------------------------------------------------------
 function api_verify_csrf(): void
 {
@@ -24,7 +24,7 @@ function api_verify_csrf(): void
 }
 
 // ----------------------
-// 📦 Items list
+// 📦 Items list (read-only)
 // ----------------------
 $router->add('GET', '/api/items', function () {
     global $DB;
@@ -46,7 +46,7 @@ $router->add('GET', '/api/items', function () {
 });
 
 // ----------------------
-// 📦 Single item by ID
+// 📦 Single item by ID (read-only)
 // ----------------------
 $router->add('GET', '/api/item', function () {
     global $DB;
@@ -69,7 +69,7 @@ $router->add('GET', '/api/item', function () {
 });
 
 // ----------------------
-// 🏷 Stock check by item + warehouse
+// 🏷 Stock check by item + warehouse (read-only)
 // Example: GET /api/stock/check?item_id=1&warehouse_id=2
 // ----------------------
 $router->add('GET', '/api/stock/check', function () {
@@ -115,5 +115,89 @@ $router->add('GET', '/api/stock/check', function () {
     } catch (Exception $e) {
         http_response_code(500);
         echo json_encode(['ok' => false, 'error' => 'Server error']);
+    }
+});
+
+// ----------------------
+// ➕ Create Item
+// ----------------------
+$router->add('POST', '/api/items', function () {
+    api_verify_csrf();
+    global $DB;
+    header('Content-Type: application/json');
+
+    $input = json_decode(file_get_contents('php://input'), true);
+    $name = trim($input['name'] ?? '');
+    $sku  = trim($input['sku'] ?? '');
+
+    if ($name === '' || $sku === '') {
+        http_response_code(400);
+        echo json_encode(['ok' => false, 'error' => 'Missing name or SKU']);
+        return;
+    }
+
+    try {
+        $stmt = $DB->prepare("INSERT INTO items (name, sku, created_at) VALUES (:name, :sku, NOW())");
+        $stmt->execute(['name' => $name, 'sku' => $sku]);
+        echo json_encode(['ok' => true, 'id' => $DB->lastInsertId()]);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['ok' => false, 'error' => 'Failed to create item']);
+    }
+});
+
+// ----------------------
+// ✏️ Update Item
+// ----------------------
+$router->add('PUT', '/api/items', function () {
+    api_verify_csrf();
+    global $DB;
+    header('Content-Type: application/json');
+
+    $input = json_decode(file_get_contents('php://input'), true);
+    $id   = (int)($input['id'] ?? 0);
+    $name = trim($input['name'] ?? '');
+    $sku  = trim($input['sku'] ?? '');
+
+    if ($id <= 0 || $name === '' || $sku === '') {
+        http_response_code(400);
+        echo json_encode(['ok' => false, 'error' => 'Missing id, name, or SKU']);
+        return;
+    }
+
+    try {
+        $stmt = $DB->prepare("UPDATE items SET name = :name, sku = :sku WHERE id = :id");
+        $stmt->execute(['id' => $id, 'name' => $name, 'sku' => $sku]);
+        echo json_encode(['ok' => true, 'updated' => $stmt->rowCount()]);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['ok' => false, 'error' => 'Failed to update item']);
+    }
+});
+
+// ----------------------
+// ❌ Delete Item
+// ----------------------
+$router->add('DELETE', '/api/items', function () {
+    api_verify_csrf();
+    global $DB;
+    header('Content-Type: application/json');
+
+    $input = json_decode(file_get_contents('php://input'), true);
+    $id = (int)($input['id'] ?? 0);
+
+    if ($id <= 0) {
+        http_response_code(400);
+        echo json_encode(['ok' => false, 'error' => 'Missing id']);
+        return;
+    }
+
+    try {
+        $stmt = $DB->prepare("DELETE FROM items WHERE id = :id");
+        $stmt->execute(['id' => $id]);
+        echo json_encode(['ok' => true, 'deleted' => $stmt->rowCount()]);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['ok' => false, 'error' => 'Failed to delete item']);
     }
 });
