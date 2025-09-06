@@ -1,4 +1,4 @@
-<?php  
+<?php
 // File: config/database.php
 // Database connection via PDO with prepared statements
 declare(strict_types=1);
@@ -78,7 +78,15 @@ try {
         PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
         PDO::ATTR_EMULATE_PREPARES   => false,
+
+        // Added options for stability
+        PDO::ATTR_TIMEOUT            => 60,
+        PDO::ATTR_PERSISTENT         => false,
     ];
+    if (defined('PDO::MYSQL_ATTR_INIT_COMMAND')) {
+        $options[PDO::MYSQL_ATTR_INIT_COMMAND] = "SET NAMES utf8mb4";
+    }
+
     $DB = new PDO($dsn, $DB_USER, $DB_PASS, $options);
 } catch (PDOException $e) {
     // Friendly error for local development. In production avoid echoing DB details.
