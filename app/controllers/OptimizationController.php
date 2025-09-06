@@ -1,5 +1,6 @@
-<?php 
+<?php  
 // File: app/controllers/OptimizationController.php
+// Purpose: Controller for optimization jobs (create, poll, view, download).
 
 declare(strict_types=1);
 
@@ -18,6 +19,9 @@ class OptimizationController extends Controller
         $this->requireRole(['Admin', 'Manager']); // restrict access
     }
 
+    /**
+     * Show list of optimization jobs with enriched progress info.
+     */
     public function index(): void
     {
         $jobs = $this->service->getAllJobs();
@@ -39,12 +43,11 @@ class OptimizationController extends Controller
                 ? (int)($db->query("SELECT COUNT(*) AS c FROM items WHERE is_active = 1")->fetch(PDO::FETCH_ASSOC)['c'] ?? 0)
                 : (int)($db->query("SELECT COUNT(*) AS c FROM items")->fetch(PDO::FETCH_ASSOC)['c'] ?? 0);
 
-            $stmtProcessed = $db->prepare("SELECT COUNT(*) AS c FROM optimization_results WHERE job_id = :job_id");
-
             foreach ($jobs as &$j) {
-                $stmtProcessed->execute(['job_id' => (int)$j['id']]);
-                $processed = (int)($stmtProcessed->fetch(PDO::FETCH_ASSOC)['c'] ?? 0);
                 $j['items_total'] = $itemsTotal;
+
+                // Prefer live items_processed from jobs table (updated per batch)
+                $processed = (int)($j['items_processed'] ?? 0);
                 $j['items_processed'] = $processed;
 
                 if (($j['status'] ?? '') === 'running') {
@@ -67,20 +70,23 @@ class OptimizationController extends Controller
         ]);
     }
 
+    /**
+     * Create a new optimization job (immediately runs via remote API).
+     */
     public function run(): void
     {
         verify_csrf();
         $horizon = filter_input(INPUT_POST, 'horizon_days', FILTER_VALIDATE_INT) ?: 90;
         $serviceLevel = filter_input(INPUT_POST, 'service_level', FILTER_VALIDATE_FLOAT) ?: 0.95;
 
-        // ✅ createJob now runs the optimization via the remote Octave API
         $jobId = $this->service->createJob($this->auth->id(), $horizon, $serviceLevel);
-
-        // ⛔ Removed: background worker launch — not needed anymore
 
         $this->redirect('/optimizations/view?job=' . (int)$jobId);
     }
 
+    /**
+     * JSON endpoint for polling job status & results.
+     */
     public function getJobJson(): void
     {
         $jobId = filter_input(INPUT_GET, 'job', FILTER_VALIDATE_INT);
@@ -102,8 +108,10 @@ class OptimizationController extends Controller
             $job['status'] = 'processing';
         }
 
+        // Results table contains full rows
         $results = $this->resultModel->getResultsForJob($jobId);
 
+        // Compute totals consistently
         $db = Database::getInstance();
         $columns = $db->query("DESCRIBE items")->fetchAll(PDO::FETCH_COLUMN, 0);
         $hasActive = in_array('is_active', $columns, true);
@@ -112,7 +120,7 @@ class OptimizationController extends Controller
             ? (int)($db->query("SELECT COUNT(*) AS c FROM items WHERE is_active = 1")->fetch(PDO::FETCH_ASSOC)['c'] ?? 0)
             : (int)($db->query("SELECT COUNT(*) AS c FROM items")->fetch(PDO::FETCH_ASSOC)['c'] ?? 0);
 
-        $itemsProcessed = count($results);
+        $itemsProcessed = (int)($job['items_processed'] ?? count($results));
         $progressPercent = ($itemsTotal > 0) ? min(100, (int)floor(($itemsProcessed / $itemsTotal) * 100)) : 0;
 
         $job['results'] = $results;
@@ -123,6 +131,9 @@ class OptimizationController extends Controller
         $this->json($job);
     }
 
+    /**
+     * HTML page showing details of one job.
+     */
     public function viewPage(): void
     {
         $jobId = filter_input(INPUT_GET, 'job', FILTER_VALIDATE_INT);
@@ -148,6 +159,9 @@ class OptimizationController extends Controller
         ]);
     }
 
+    /**
+     * Download a CSV report for one job.
+     */
     public function downloadReport(): void
     {
         $jobId = filter_input(INPUT_GET, 'job', FILTER_VALIDATE_INT);
@@ -167,7 +181,7 @@ class OptimizationController extends Controller
             return;
         }
 
-        // 🔧 Clear any previous output
+        // Clear any buffered output
         while (ob_get_level()) {
             ob_end_clean();
         }
@@ -184,8 +198,8 @@ class OptimizationController extends Controller
         foreach ($results as $row) {
             $item = $this->getItemById($row['item_id']);
             fputcsv($output, [
-                $item['id'],
-                $item['name'],
+                $item['id'] ?? $row['item_id'],
+                $item['name'] ?? 'Unknown',
                 $row['eoq'] ?? 'N/A',
                 $row['reorder_point'] ?? 'N/A',
                 $row['safety_stock'] ?? 'N/A'

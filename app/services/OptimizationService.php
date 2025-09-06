@@ -1,13 +1,12 @@
-<?php 
+<?php
 // File: app/services/OptimizationService.php
 // Purpose: Create & run optimization jobs by calling the Render-hosted Octave API.
-// NOTES:
-// - This version no longer shells out to octave-cli (InfinityFree restriction).
-// - It collects items from MySQL, posts them as JSON to OCTAVE_API_URL (/run),
-//   normalizes the response, writes results to DB, and updates the job record.
-// - This revision dynamically selects only columns that exist in the `items` table
-//   so the code won't attempt to SELECT non-existent columns (e.g. unit_cost).
-// - Added automatic reconnect/retry for "MySQL server has gone away" (SQLSTATE 2006).
+// Notes:
+// - No shelling out to octave-cli (InfinityFree restriction).
+// - Gathers items from MySQL with dynamic column detection,
+//   posts them in manageable batches to OCTAVE_API_URL,
+//   normalizes responses, persists results, and updates job status/progress.
+// - Adds DB auto-reconnect, robust error handling, and precise items_processed.
 
 declare(strict_types=1);
 
@@ -19,19 +18,29 @@ class OptimizationService
     // Fallback API URL if env not present
     private string $defaultApiUrl = 'https://octave-api.onrender.com/run';
 
-    // How many reconnect attempts for an operation (1 retry after reconnect)
+    // DB reconnect attempts (1 retry after reconnect)
     private int $dbReconnectRetries = 1;
+
+    // Batching to avoid HTTP timeouts/oversized payloads on shared hosting
+    private int $batchSize = 200;
+
+    // HTTP timeout per batch (seconds)
+    private int $httpTimeout = 60;
 
     public function __construct()
     {
         global $DB;
         $this->db = $DB;
         $this->resultModel = new OptimizationResult();
+        try {
+            $this->db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        } catch (\Throwable $t) {
+            // ignore if driver blocks attribute change
+        }
     }
 
     /**
-     * Small helper: attempt to re-create the $DB PDO connection by including config/database.php.
-     * Returns true on success (and assigns $this->db), false otherwise.
+     * Attempt to rebuild the PDO connection by requiring config/database.php.
      */
     protected function attemptReconnect(): bool
     {
@@ -43,24 +52,19 @@ class OptimizationService
                 return false;
             }
 
-            // Re-require config/database.php — it should set the global $DB PDO instance
             /** @noinspection PhpIncludeInspection */
             require_once $dbFile;
             global $DB;
             if (isset($DB) && $DB instanceof PDO) {
                 $this->db = $DB;
-                // Ensure exceptions for PDO so we catch them
                 try {
                     $this->db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-                } catch (\Throwable $t) {
-                    // ignore if driver doesn't allow changing attributes
-                }
+                } catch (\Throwable $t) {}
                 $this->log_to_file("🔁 Reconnected to database successfully.");
                 return true;
-            } else {
-                $this->log_to_file("⚠️ attemptReconnect: config/database.php did not provide \$DB PDO instance.");
-                return false;
             }
+            $this->log_to_file("⚠️ attemptReconnect: \$DB PDO instance not available after include.");
+            return false;
         } catch (\Throwable $t) {
             $this->log_to_file("⚠️ attemptReconnect failed: " . $t->getMessage());
             return false;
@@ -68,15 +72,7 @@ class OptimizationService
     }
 
     /**
-     * Execute a callable that performs DB work and retry once after reconnect if
-     * we detect "MySQL server has gone away" (SQLSTATE 2006).
-     *
-     * Usage: $this->execWithReconnect(function() use (...) { return $this->db->query(...); });
-     *
-     * @param callable $fn Callable that performs DB work and returns a value.
-     * @param int $retries Remaining retries (internal). Default uses $this->dbReconnectRetries.
-     * @return mixed
-     * @throws \Throwable rethrows final exception if failure persists.
+     * Execute a DB callable with one reconnect retry on "server has gone away".
      */
     protected function execWithReconnect(callable $fn, int $retries = null)
     {
@@ -85,41 +81,34 @@ class OptimizationService
             return $fn();
         } catch (\PDOException $e) {
             $msg = $e->getMessage();
-            $this->log_to_file("⚠️ PDOException caught: " . $msg);
-            $isGoneAway = (stripos($msg, 'MySQL server has gone away') !== false)
-                || (stripos($msg, 'server has gone away') !== false)
-                || ($e->errorInfo[1] ?? null) === 2006;
+            $this->log_to_file("⚠️ PDOException: {$msg}");
+            $isGoneAway = (stripos($msg, 'server has gone away') !== false)
+                || (($e->errorInfo[1] ?? null) === 2006);
 
             if ($isGoneAway && $retries > 0) {
-                $this->log_to_file("🔁 Detected MySQL gone away — attempting reconnect and retry ({$retries} retries left)...");
+                $this->log_to_file("🔁 DB gone away — reconnecting (retries left: {$retries})...");
                 if ($this->attemptReconnect()) {
-                    // Retry the callable once
                     return $this->execWithReconnect($fn, $retries - 1);
                 }
             }
-
-            // Not recoverable or retries exhausted — rethrow
             throw $e;
         } catch (\Throwable $t) {
-            // Non-PDO errors — rethrow
             throw $t;
         }
     }
 
     /**
-     * Create a new optimization job and POST it to the Octave API.
+     * Create a new job and immediately run it (batched).
      */
     public function createJob(int $userId, int $horizonDays, float $serviceLevel): int
     {
-        // Get total count safely with reconnect logic
+        // Total items (safe)
         $totalItems = (int)$this->execWithReconnect(function () {
-            $row = $this->db
-                ->query("SELECT COUNT(*) AS c FROM items")
-                ->fetch(PDO::FETCH_ASSOC);
+            $row = $this->db->query("SELECT COUNT(*) AS c FROM items")->fetch(PDO::FETCH_ASSOC);
             return $row['c'] ?? 0;
         });
 
-        // Insert job record (wrapped)
+        // Insert job
         $this->execWithReconnect(function () use ($userId, $horizonDays, $serviceLevel, $totalItems) {
             $stmt = $this->db->prepare("
                 INSERT INTO optimization_jobs (
@@ -137,112 +126,136 @@ class OptimizationService
             return true;
         });
 
-        // lastInsertId also wrapped (some drivers may require active connection)
         $jobId = (int)$this->execWithReconnect(function () {
             return (int)$this->db->lastInsertId();
         });
 
-        // Immediately run the job through the remote API (this method has its own DB wrappers)
+        // Run immediately (batched)
         $this->runOctaveJob($jobId, $horizonDays, $serviceLevel);
 
         return $jobId;
     }
 
     /**
-     * Main pipeline: read items -> call API -> normalize -> persist -> mark status.
+     * Main pipeline (BATCHED): read items -> for each batch: call API -> normalize -> persist -> update progress -> at end mark complete/failed.
      */
     protected function runOctaveJob(int $jobId, int $horizonDays, float $serviceLevel): void
     {
         $this->markJobRunning($jobId);
 
-        // 1) Collect items to optimize
-        $items = $this->fetchItemsForOptimization();
-        if (empty($items)) {
+        // 1) Fetch items once
+        $allItems = $this->fetchItemsForOptimization();
+        $total = count($allItems);
+
+        if ($total === 0) {
             $this->log_to_file("❌ Job {$jobId}: No items available to optimize.");
             $this->markJobFailed($jobId, 'No items available to optimize.');
             return;
         }
 
-        // 2) Prepare POST payload for Render API
-        $payload = [
-            'job_id'        => $jobId,
-            'horizon_days'  => $horizonDays,
-            'service_level' => $serviceLevel,
-            'items'         => $items,
-        ];
-
-        // 3) Call Octave API
+        // 2) Prepare batching
         $apiUrl = getenv('OCTAVE_API_URL') ?: $this->defaultApiUrl;
-        $this->log_to_file("OptimizationService: POST {$apiUrl} (job {$jobId})");
-        $response = $this->postJson($apiUrl, $payload, 120); // 120s timeout
+        $batchSize = max(1, $this->batchSize);
+        $timeout = max(30, $this->httpTimeout);
 
-        if (!$response['ok']) {
-            $reason = "Remote API call failed: " . $response['error'];
-            $this->log_to_file("❌ {$reason} (job {$jobId})");
-            $this->markJobFailed($jobId, $reason);
-            return;
+        $aggregateResults = [];
+        $anyBatchSucceeded = false;
+        $itemsProcessed = 0;
+
+        // 3) Iterate batches
+        for ($offset = 0; $offset < $total; $offset += $batchSize) {
+            $batch = array_slice($allItems, $offset, $batchSize);
+            $batchIndex = (int)floor($offset / $batchSize) + 1;
+            $batchCount = count($batch);
+
+            $payload = [
+                'job_id'        => $jobId,
+                'horizon_days'  => $horizonDays,
+                'service_level' => $serviceLevel,
+                'items'         => $batch,
+            ];
+
+            $this->log_to_file("OptimizationService: POST {$apiUrl} (job {$jobId}, batch {$batchIndex}, size {$batchCount})");
+            $response = $this->postJson($apiUrl, $payload, $timeout);
+
+            if (!$response['ok']) {
+                $reason = "Remote API failed (batch {$batchIndex}): " . $response['error'] . " [HTTP " . ($response['status'] ?? 'n/a') . "]";
+                $this->log_to_file("❌ {$reason} (job {$jobId})");
+                // continue to next batch; we want partial progress if others succeed
+                continue;
+            }
+
+            $decoded = $response['json'];
+            if (!is_array($decoded)) {
+                $this->log_to_file("❌ Job {$jobId}: Invalid JSON in batch {$batchIndex}.");
+                continue;
+            }
+
+            $results = $this->normalize_results_payload($decoded);
+            $this->log_to_file("Normalization produced " . count($results) . " rows (job {$jobId}, batch {$batchIndex}).");
+
+            if (empty($results)) {
+                // nothing usable from this batch—continue
+                continue;
+            }
+
+            // Update items table (best-effort)
+            $this->applyItemResultsBestEffort($results);
+
+            // Persist results for this batch
+            $saved = $this->saveOptimizationResults($jobId, $results);
+            $itemsProcessed += $saved;
+            if ($saved > 0) {
+                $anyBatchSucceeded = true;
+                $this->incrementProcessed($jobId, $saved);
+                // accumulate only a compact subset to avoid massive job.results
+                foreach ($results as $r) {
+                    if (count($aggregateResults) >= 1000) break; // cap snapshot size
+                    $aggregateResults[] = [
+                        'item_id'       => $r['item_id'],
+                        'eoq'           => $r['eoq'],
+                        'reorder_point' => $r['reorder_point'],
+                        'safety_stock'  => $r['safety_stock'],
+                    ];
+                }
+            }
         }
 
-        // 4) Decode & normalize results
-        $decoded = $response['json'];
-        if (!is_array($decoded)) {
-            $this->log_to_file("❌ Job {$jobId}: Invalid JSON from remote API.");
-            $this->markJobFailed($jobId, 'Invalid JSON from remote API.');
-            return;
+        // 4) Finalize job state
+        if ($anyBatchSucceeded && $itemsProcessed > 0) {
+            $this->markJobComplete($jobId, $aggregateResults, $itemsProcessed);
+            $this->log_to_file("✅ Job {$jobId} complete. Saved {$itemsProcessed} rows.");
+        } else {
+            $this->markJobFailed($jobId, 'All batches failed or returned no usable results.');
+            $this->log_to_file("❌ Job {$jobId} failed: no successful batches.");
         }
-
-        $results = $this->normalize_results_payload($decoded);
-        $this->log_to_file("Normalization produced " . count($results) . " rows (job {$jobId}).");
-
-        if (empty($results)) {
-            $this->markJobFailed($jobId, 'Remote API returned no usable rows after normalization.');
-            return;
-        }
-
-        // 5) Update items table best-effort (EOQ/ROP/SS columns if present)
-        $this->applyItemResultsBestEffort($results);
-
-        // 6) Persist results in optimization_results (row-per-item)
-        $savedCount = $this->saveOptimizationResults($jobId, $results);
-
-        // 7) Mark job complete with a compact snapshot
-        $this->markJobComplete($jobId, $results, $savedCount);
-
-        $this->log_to_file("✅ Job {$jobId} complete. Saved {$savedCount} rows.");
     }
 
     /**
-     * Get items to send to Octave service.
-     *
-     * Dynamically picks only the columns that actually exist in the `items` table.
-     * Applies WHERE is_active=1 only if that column exists.
+     * Get items to send to Octave service with dynamic column selection.
      */
     protected function fetchItemsForOptimization(): array
     {
-        // Preferred column => alias in result
+        // preferred column => alias
         $preferred = [
             'id'               => 'item_id',         // REQUIRED
             'avg_daily_demand' => 'avg_daily_demand',
             'lead_time_days'   => 'lead_time_days',
-            'unit_cost'        => 'unit_cost',       // removed automatically if not present
+            'unit_cost'        => 'unit_cost',
             'safety_stock'     => 'safety_stock',
             'order_cost'       => 'order_cost',
         ];
 
         $existing = $this->fetchTableColumns('items');
         if (empty($existing)) {
-            $this->log_to_file("⚠️ OptimizationService: DESCRIBE items returned no columns.");
+            $this->log_to_file("⚠️ DESCRIBE items returned no columns.");
             return [];
         }
 
-        // Build SELECT parts only for columns that exist
         $selectParts = [];
         foreach ($preferred as $col => $alias) {
-            if (!in_array($col, $existing, true)) {
-                continue;
-            }
+            if (!in_array($col, $existing, true)) continue;
 
-            // Special handling/defaults
             if ($col === 'id') {
                 $selectParts[] = "`id` AS `item_id`";
                 continue;
@@ -251,18 +264,15 @@ class OptimizationService
                 $selectParts[] = "COALESCE(`{$col}`, 50) AS `{$alias}`";
                 continue;
             }
-
             $selectParts[] = "COALESCE(`{$col}`, 0) AS `{$alias}`";
         }
 
         if (empty($selectParts) || !in_array("`id` AS `item_id`", $selectParts, true)) {
-            $this->log_to_file("⚠️ OptimizationService: items.id missing, cannot fetch items.");
+            $this->log_to_file("⚠️ items.id missing, cannot fetch items.");
             return [];
         }
 
-        // Add WHERE clause only if is_active exists
         $where = in_array('is_active', $existing, true) ? "WHERE `is_active` = 1" : "";
-
         $sql = "SELECT " . implode(",\n       ", $selectParts) . "\nFROM `items` {$where}";
 
         try {
@@ -271,34 +281,21 @@ class OptimizationService
                 return $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
             });
         } catch (\Throwable $t) {
-            $this->log_to_file("❌ OptimizationService: fetchItemsForOptimization query failed: " . $t->getMessage());
+            $this->log_to_file("❌ fetchItemsForOptimization failed: " . $t->getMessage());
             return [];
         }
 
-        // Ensure numeric types only for keys that are present
         foreach ($rows as &$r) {
-            if (isset($r['item_id'])) {
-                $r['item_id'] = (int)$r['item_id'];
-            }
-            if (isset($r['avg_daily_demand'])) {
-                $r['avg_daily_demand'] = (float)$r['avg_daily_demand'];
-            }
-            if (isset($r['lead_time_days'])) {
-                $r['lead_time_days'] = (float)$r['lead_time_days'];
-            }
-            if (isset($r['unit_cost'])) {
-                $r['unit_cost'] = (float)$r['unit_cost'];
-            }
-            if (isset($r['safety_stock'])) {
-                $r['safety_stock'] = (float)$r['safety_stock'];
-            }
-            if (isset($r['order_cost'])) {
-                $r['order_cost'] = (float)$r['order_cost'];
-            }
+            if (isset($r['item_id']))            $r['item_id'] = (int)$r['item_id'];
+            if (isset($r['avg_daily_demand']))   $r['avg_daily_demand'] = (float)$r['avg_daily_demand'];
+            if (isset($r['lead_time_days']))     $r['lead_time_days'] = (float)$r['lead_time_days'];
+            if (isset($r['unit_cost']))          $r['unit_cost'] = (float)$r['unit_cost'];
+            if (isset($r['safety_stock']))       $r['safety_stock'] = (float)$r['safety_stock'];
+            if (isset($r['order_cost']))         $r['order_cost'] = (float)$r['order_cost'];
         }
         unset($r);
 
-        $this->log_to_file("OptimizationService: fetched " . count($rows) . " items for optimization.");
+        $this->log_to_file("Fetched " . count($rows) . " items for optimization.");
         return $rows;
     }
 
@@ -399,15 +396,15 @@ class OptimizationService
                         $sets = [];
                         $params = ['id' => (int)$r['item_id']];
 
-                        if ($colEOQ && isset($r['eoq'])) {
+                        if ($colEOQ && array_key_exists('eoq', $r) && $r['eoq'] !== null) {
                             $sets[] = "$colEOQ = :eoq";
                             $params['eoq'] = (float)$r['eoq'];
                         }
-                        if ($colROP && isset($r['reorder_point'])) {
+                        if ($colROP && array_key_exists('reorder_point', $r) && $r['reorder_point'] !== null) {
                             $sets[] = "$colROP = :rop";
                             $params['rop'] = (float)$r['reorder_point'];
                         }
-                        if ($colSS && isset($r['safety_stock'])) {
+                        if ($colSS && array_key_exists('safety_stock', $r) && $r['safety_stock'] !== null) {
                             $sets[] = "$colSS = :ss";
                             $params['ss'] = (float)$r['safety_stock'];
                         }
@@ -445,17 +442,15 @@ class OptimizationService
 
     protected function normalize_result_row(array $row): ?array
     {
+        $itemId = null;
         if (isset($row['item_id'])) {
             $itemId = (int)$row['item_id'];
         } elseif (isset($row['id'])) {
             $itemId = (int)$row['id'];
-        } else {
-            $this->log_to_file("⚠️ Skipping row without item id: " . json_encode($row));
-            return null;
         }
 
-        if ($itemId <= 0) {
-            $this->log_to_file("⚠️ Skipping row with invalid item_id={$itemId}: " . json_encode($row));
+        if (!$itemId || $itemId <= 0) {
+            $this->log_to_file("⚠️ Skipping row without valid item id: " . json_encode($row));
             return null;
         }
 
@@ -487,7 +482,7 @@ class OptimizationService
 
             $id = $norm['item_id'];
             if (isset($seen[$id])) {
-                $this->log_to_file("⚠️ Duplicate item_id {$id}, keeping first and skipping.");
+                // keep first
                 continue;
             }
             $seen[$id] = true;
@@ -496,7 +491,7 @@ class OptimizationService
         return $out;
     }
 
-    // Job status helpers
+    // ---- Job status helpers -------------------------------------------------
 
     public function markJobRunning(int $jobId): void
     {
@@ -519,6 +514,7 @@ class OptimizationService
     {
         try {
             $this->execWithReconnect(function () use ($jobId, $results, $itemsProcessed) {
+                // Keep results snapshot compact; already trimmed during batching.
                 $json = $results ? json_encode($results) : null;
                 $stmt = $this->db->prepare("
                     UPDATE optimization_jobs
@@ -559,8 +555,7 @@ class OptimizationService
                 return true;
             });
         } catch (\Throwable $t) {
-            // If even the failure marker can't be written, log locally and give up
-            $this->log_to_file("⚠️ markJobFailed failed to write to DB for job {$jobId}: " . $t->getMessage());
+            $this->log_to_file("⚠️ markJobFailed could not write to DB for job {$jobId}: " . $t->getMessage());
         }
     }
 
@@ -655,7 +650,7 @@ class OptimizationService
         }
     }
 
-    // Logging helper
+    // ---- Logging ------------------------------------------------------------
 
     protected function log_to_file(string $message): void
     {
