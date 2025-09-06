@@ -6,6 +6,7 @@
 // - All queries forced through execWithReconnect.
 // - Extended retries for "server has gone away".
 // - More resilient saveOptimizationResults batching.
+// - createJob() now only inserts (queues) a job and returns its id.
 
 declare(strict_types=1);
 
@@ -16,7 +17,7 @@ class OptimizationService
 
     private string $defaultApiUrl = 'https://octave-api.onrender.com/optimize';
 
-    private int $dbReconnectRetries = 3;   // increased from 1
+    private int $dbReconnectRetries = 3;
     private int $batchSize = 200;
     private int $httpTimeout = 60;
 
@@ -36,7 +37,9 @@ class OptimizationService
             if (defined('PDO::MYSQL_ATTR_INIT_COMMAND')) {
                 $this->db->setAttribute(PDO::MYSQL_ATTR_INIT_COMMAND, "SET NAMES utf8mb4");
             }
-        } catch (\Throwable $t) {}
+        } catch (\Throwable $t) {
+            // best-effort only
+        }
     }
 
     protected function attemptReconnect(): bool
@@ -69,13 +72,14 @@ class OptimizationService
     protected function execWithReconnect(callable $fn, int $retries = null)
     {
         if ($retries === null) $retries = $this->dbReconnectRetries;
+
         try {
-            // ping before using
+            // ping before using; if this fails try to reconnect
             $this->db->query("SELECT 1");
         } catch (\Throwable $t) {
             $this->log_to_file("⚠️ Connection lost before query: " . $t->getMessage());
             if ($this->attemptReconnect()) {
-                return $this->execWithReconnect($fn, $retries - 1);
+                return $this->execWithReconnect($fn, max(0, $retries - 1));
             }
         }
 
@@ -101,6 +105,10 @@ class OptimizationService
     // Main service functions
     // ----------------------
 
+    /**
+     * Insert a job and return its ID.
+     * IMPORTANT: This no longer runs the heavy job inline.
+     */
     public function createJob(int $userId, int $horizonDays, float $serviceLevel): int
     {
         $totalItems = (int)$this->execWithReconnect(function () {
@@ -129,10 +137,13 @@ class OptimizationService
             return (int)$this->db->lastInsertId();
         });
 
-        $this->runOctaveJob($jobId, $horizonDays, $serviceLevel);
+        $this->log_to_file("Created job {$jobId} (enqueued).");
         return $jobId;
     }
 
+    /**
+     * Run the heavy job processing (used by the CLI worker).
+     */
     protected function runOctaveJob(int $jobId, int $horizonDays, float $serviceLevel): void
     {
         $this->markJobRunning($jobId);
@@ -187,7 +198,12 @@ class OptimizationService
                 $this->incrementProcessed($jobId, $saved);
                 foreach ($results as $r) {
                     if (count($aggregateResults) >= 1000) break;
-                    $aggregateResults[] = $r;
+                    $aggregateResults[] = [
+                        'item_id'       => $r['item_id'],
+                        'eoq'           => $r['eoq'],
+                        'reorder_point' => $r['reorder_point'],
+                        'safety_stock'  => $r['safety_stock'],
+                    ];
                 }
             }
         }
@@ -240,6 +256,7 @@ class OptimizationService
                 return $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
             });
         } catch (\Throwable $t) {
+            $this->log_to_file("⚠️ fetchItemsForOptimization failed: " . $t->getMessage());
             return [];
         }
 
@@ -296,6 +313,8 @@ class OptimizationService
             $count = 0;
             try {
                 foreach ($results as $r) {
+                    // resultModel->saveResults accepts either a single row or array depending on implementation.
+                    // Existing implementation expects ($jobId, $row) for individual saves, so keep that.
                     $this->resultModel->saveResults($jobId, $r);
                     $count++;
                 }
@@ -303,6 +322,7 @@ class OptimizationService
                 return $count;
             } catch (\Throwable $t) {
                 $this->db->rollBack();
+                $this->log_to_file("⚠️ saveOptimizationResults failed: " . $t->getMessage());
                 throw $t;
             }
         });
@@ -348,7 +368,9 @@ class OptimizationService
                 }
                 return true;
             });
-        } catch (\Throwable $t) {}
+        } catch (\Throwable $t) {
+            $this->log_to_file("⚠️ applyItemResultsBestEffort failed: " . $t->getMessage());
+        }
     }
 
     protected function fetchTableColumns(string $table): array
@@ -359,6 +381,7 @@ class OptimizationService
                 return $stmt ? $stmt->fetchAll(PDO::FETCH_COLUMN, 0) : [];
             });
         } catch (\Throwable $t) {
+            $this->log_to_file("⚠️ fetchTableColumns failed for {$table}: " . $t->getMessage());
             return [];
         }
     }
@@ -384,10 +407,19 @@ class OptimizationService
         if (!is_array($decoded)) return [];
 
         $out = [];
+        $seen = [];
         foreach ($decoded as $row) {
             if (!is_array($row)) continue;
             $norm = $this->normalize_result_row($row);
-            if ($norm) $out[] = $norm;
+            if ($norm) {
+                $itemId = $norm['item_id'];
+                if (isset($seen[$itemId])) {
+                    $this->log_to_file("⚠️ Duplicate result for item_id={$itemId}, skipping extra row.");
+                    continue;
+                }
+                $seen[$itemId] = true;
+                $out[] = $norm;
+            }
         }
         return $out;
     }
