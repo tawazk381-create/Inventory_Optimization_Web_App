@@ -14,6 +14,18 @@ declare(strict_types=1);
 
 $projectRoot = dirname(__DIR__);
 
+// -- simple log helper ----------------------------------------------------------
+function db_log_to_file(string $message): void
+{
+    $root = dirname(__DIR__);
+    $dir  = $root . '/storage/logs';
+    if (!is_dir($dir)) @mkdir($dir, 0777, true);
+    $file = $dir . '/optimization_service.log';
+
+    $line = '[' . date('c') . '] [DB-CONNECT] ' . $message . PHP_EOL;
+    @file_put_contents($file, $line, FILE_APPEND | LOCK_EX);
+}
+
 // -- tiny .env loader (fallback) ------------------------------------------------
 function load_dotenv_fallback(string $envFile): void
 {
@@ -92,8 +104,10 @@ $DB = null;
 for ($i = 1; $i <= $maxRetries; $i++) {
     try {
         $DB = new PDO($dsn, $DB_USER, $DB_PASS, $options);
+        db_log_to_file("✅ Database connection established (attempt {$i}).");
         break; // success
     } catch (PDOException $e) {
+        db_log_to_file("❌ Connection attempt {$i} failed: " . $e->getMessage());
         if ($i === $maxRetries) {
             http_response_code(500);
             echo "Database connection failed after {$maxRetries} attempts.\n";
