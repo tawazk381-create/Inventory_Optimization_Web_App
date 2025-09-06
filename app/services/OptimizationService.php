@@ -1,10 +1,11 @@
 <?php
 // File: app/services/OptimizationService.php
 // Purpose: Create & run optimization jobs by calling the Render-hosted Octave API.
-// Notes:
-// - Updated default API URL to /optimize (Flask route).
-// - Normalizes results from {"results":[...]} JSON payload.
-// - Retains batching, DB reconnect, and logging.
+// Updates:
+// - Stronger DB reconnect handling (ping + multiple retries).
+// - All queries forced through execWithReconnect.
+// - Extended retries for "server has gone away".
+// - More resilient saveOptimizationResults batching.
 
 declare(strict_types=1);
 
@@ -13,10 +14,9 @@ class OptimizationService
     protected PDO $db;
     protected OptimizationResult $resultModel;
 
-    // ✅ Correct API URL (matches Flask: /optimize)
     private string $defaultApiUrl = 'https://octave-api.onrender.com/optimize';
 
-    private int $dbReconnectRetries = 1;
+    private int $dbReconnectRetries = 3;   // increased from 1
     private int $batchSize = 200;
     private int $httpTimeout = 60;
 
@@ -25,8 +25,17 @@ class OptimizationService
         global $DB;
         $this->db = $DB;
         $this->resultModel = new OptimizationResult();
+        $this->applyPdoAttributes();
+    }
+
+    protected function applyPdoAttributes(): void
+    {
         try {
             $this->db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+            $this->db->setAttribute(PDO::ATTR_TIMEOUT, 60);
+            if (defined('PDO::MYSQL_ATTR_INIT_COMMAND')) {
+                $this->db->setAttribute(PDO::MYSQL_ATTR_INIT_COMMAND, "SET NAMES utf8mb4");
+            }
         } catch (\Throwable $t) {}
     }
 
@@ -40,17 +49,15 @@ class OptimizationService
                 return false;
             }
 
-            require_once $dbFile;
+            require $dbFile;
             global $DB;
             if (isset($DB) && $DB instanceof PDO) {
                 $this->db = $DB;
-                try {
-                    $this->db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-                } catch (\Throwable $t) {}
+                $this->applyPdoAttributes();
                 $this->log_to_file("🔁 Reconnected to database successfully.");
                 return true;
             }
-            $this->log_to_file("⚠️ attemptReconnect: \$DB PDO instance not available after include.");
+            $this->log_to_file("⚠️ attemptReconnect: \$DB not available after include.");
             return false;
         } catch (\Throwable $t) {
             $this->log_to_file("⚠️ attemptReconnect failed: " . $t->getMessage());
@@ -58,9 +65,20 @@ class OptimizationService
         }
     }
 
+    /** Wraps a DB operation, reconnecting if "server has gone away". */
     protected function execWithReconnect(callable $fn, int $retries = null)
     {
         if ($retries === null) $retries = $this->dbReconnectRetries;
+        try {
+            // ping before using
+            $this->db->query("SELECT 1");
+        } catch (\Throwable $t) {
+            $this->log_to_file("⚠️ Connection lost before query: " . $t->getMessage());
+            if ($this->attemptReconnect()) {
+                return $this->execWithReconnect($fn, $retries - 1);
+            }
+        }
+
         try {
             return $fn();
         } catch (\PDOException $e) {
@@ -78,6 +96,10 @@ class OptimizationService
             throw $e;
         }
     }
+
+    // ----------------------
+    // Main service functions
+    // ----------------------
 
     public function createJob(int $userId, int $horizonDays, float $serviceLevel): int
     {
@@ -108,7 +130,6 @@ class OptimizationService
         });
 
         $this->runOctaveJob($jobId, $horizonDays, $serviceLevel);
-
         return $jobId;
     }
 
@@ -166,12 +187,7 @@ class OptimizationService
                 $this->incrementProcessed($jobId, $saved);
                 foreach ($results as $r) {
                     if (count($aggregateResults) >= 1000) break;
-                    $aggregateResults[] = [
-                        'item_id'       => $r['item_id'],
-                        'eoq'           => $r['eoq'],
-                        'reorder_point' => $r['reorder_point'],
-                        'safety_stock'  => $r['safety_stock'],
-                    ];
+                    $aggregateResults[] = $r;
                 }
             }
         }
@@ -182,6 +198,10 @@ class OptimizationService
             $this->markJobFailed($jobId, 'All batches failed or returned no results.');
         }
     }
+
+    // ----------------------
+    // DB operations
+    // ----------------------
 
     protected function fetchItemsForOptimization(): array
     {
@@ -270,25 +290,22 @@ class OptimizationService
     protected function saveOptimizationResults(int $jobId, array $results): int
     {
         if (empty($results)) return 0;
-        try {
-            return $this->execWithReconnect(function () use ($jobId, $results) {
-                $this->db->beginTransaction();
-                $count = 0;
-                try {
-                    foreach ($results as $r) {
-                        $this->resultModel->saveResults($jobId, $r);
-                        $count++;
-                    }
-                    $this->db->commit();
-                    return $count;
-                } catch (\Throwable $t) {
-                    $this->db->rollBack();
-                    throw $t;
+
+        return $this->execWithReconnect(function () use ($jobId, $results) {
+            $this->db->beginTransaction();
+            $count = 0;
+            try {
+                foreach ($results as $r) {
+                    $this->resultModel->saveResults($jobId, $r);
+                    $count++;
                 }
-            });
-        } catch (\Throwable $t) {
-            return 0;
-        }
+                $this->db->commit();
+                return $count;
+            } catch (\Throwable $t) {
+                $this->db->rollBack();
+                throw $t;
+            }
+        });
     }
 
     protected function applyItemResultsBestEffort(array $results): void
