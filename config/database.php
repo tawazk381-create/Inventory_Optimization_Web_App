@@ -71,27 +71,36 @@ $DB_PASS = getenv('DB_PASSWORD') ?: 'mXfZxRyrItM9';
 
 // Optional DSN overrides (useful if set by .env)
 $charset = 'utf8mb4';
+$dsn = "mysql:host={$DB_HOST};port={$DB_PORT};dbname={$DB_NAME};charset={$charset}";
 
-try {
-    $dsn = "mysql:host={$DB_HOST};port={$DB_PORT};dbname={$DB_NAME};charset={$charset}";
-    $options = [
-        PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
-        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-        PDO::ATTR_EMULATE_PREPARES   => false,
+$options = [
+    PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+    PDO::ATTR_EMULATE_PREPARES   => false,
 
-        // Added options for stability
-        PDO::ATTR_TIMEOUT            => 60,
-        PDO::ATTR_PERSISTENT         => false,
-    ];
-    if (defined('PDO::MYSQL_ATTR_INIT_COMMAND')) {
-        $options[PDO::MYSQL_ATTR_INIT_COMMAND] = "SET NAMES utf8mb4";
+    // Added options for stability
+    PDO::ATTR_TIMEOUT            => 60,
+    PDO::ATTR_PERSISTENT         => false,
+];
+if (defined('PDO::MYSQL_ATTR_INIT_COMMAND')) {
+    $options[PDO::MYSQL_ATTR_INIT_COMMAND] = "SET NAMES utf8mb4";
+}
+
+// -- Try connecting with retries ------------------------------------------------
+$maxRetries = 3;
+$DB = null;
+for ($i = 1; $i <= $maxRetries; $i++) {
+    try {
+        $DB = new PDO($dsn, $DB_USER, $DB_PASS, $options);
+        break; // success
+    } catch (PDOException $e) {
+        if ($i === $maxRetries) {
+            http_response_code(500);
+            echo "Database connection failed after {$maxRetries} attempts.\n";
+            error_log('DB connection error: ' . $e->getMessage());
+            exit;
+        }
+        // wait a little before retrying
+        sleep(2);
     }
-
-    $DB = new PDO($dsn, $DB_USER, $DB_PASS, $options);
-} catch (PDOException $e) {
-    // Friendly error for local development. In production avoid echoing DB details.
-    http_response_code(500);
-    echo "Database connection failed. Please check your database settings.\n";
-    error_log('DB connection error: ' . $e->getMessage());
-    exit;
 }
