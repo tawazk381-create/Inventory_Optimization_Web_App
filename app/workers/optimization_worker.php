@@ -124,26 +124,56 @@ function normalize_results_payload($decoded): array
 }
 
 /**
- * Call the external Octave API (Render).
+ * Determine Octave API URL: env override or default to Render /optimize endpoint.
  */
-function call_octave_api(array $items): array
+function get_octave_api_url(): string
 {
-    $url = "https://octave-api.onrender.com/run";
+    $env = getenv('OCTAVE_API_URL');
+    if ($env && is_string($env) && trim($env) !== '') {
+        return trim($env);
+    }
+    return 'https://octave-api.onrender.com/optimize';
+}
+
+/**
+ * Call the external Octave API (Render).
+ * Sends items plus optional controls.
+ *
+ * @param array $items      Array of item rows (already remapped to include item_id).
+ * @param int|null $horizon Planning horizon in days (optional).
+ * @param float|null $sl    Service level (0–1, optional).
+ * @return array            Decoded JSON response.
+ * @throws Exception
+ */
+function call_octave_api(array $items, ?int $horizon = null, ?float $sl = null): array
+{
+    $url = get_octave_api_url();
 
     $payload = [
-        "items" => $items
+        'items' => array_values($items),
     ];
+    if ($horizon !== null && $horizon > 0) {
+        $payload['horizon_days'] = $horizon;
+    }
+    if ($sl !== null && $sl > 0 && $sl < 1.0) {
+        $payload['service_level'] = $sl;
+    }
 
     $ch = curl_init($url);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 120);
 
     $response = curl_exec($ch);
 
     if ($response === false) {
-        throw new Exception("Curl error: " . curl_error($ch));
+        $err = curl_error($ch);
+        $code = curl_errno($ch);
+        curl_close($ch);
+        throw new Exception("Curl error [{$code}]: {$err}");
     }
 
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -162,6 +192,17 @@ function call_octave_api(array $items): array
 }
 
 /**
+ * Try to fetch the job row (for optional params like horizon_days, service_level).
+ */
+function fetch_job_row(PDO $DB, int $jobId): ?array
+{
+    $stmt = $DB->prepare("SELECT * FROM optimization_jobs WHERE id = :id LIMIT 1");
+    $stmt->execute(['id' => $jobId]);
+    $job = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $job ?: null;
+}
+
+/**
  * Processes one optimization job.
  */
 function run_optimization_worker(PDO $DB, ?int $jobId = null): void
@@ -169,9 +210,16 @@ function run_optimization_worker(PDO $DB, ?int $jobId = null): void
     $logPrefix = '[' . date('c') . ']';
 
     // --- claim job ---
+    $job = null;
     if ($jobId === null) {
         $DB->beginTransaction();
-        $stmt = $DB->prepare("SELECT * FROM optimization_jobs WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1 FOR UPDATE");
+        $stmt = $DB->prepare("
+            SELECT * FROM optimization_jobs
+            WHERE status = 'pending'
+            ORDER BY created_at ASC
+            LIMIT 1
+            FOR UPDATE
+        ");
         $stmt->execute();
         $job = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$job) {
@@ -199,15 +247,31 @@ function run_optimization_worker(PDO $DB, ?int $jobId = null): void
             echo $msg . "\n"; log_to_file($msg);
             return;
         }
+        // Fetch job row for optional parameters
+        $job = fetch_job_row($DB, $jobId);
     }
 
     $msg = "{$logPrefix} Claimed job {$jobId}";
     echo $msg . "\n"; log_to_file($msg);
 
+    // Optional controls from job (fallbacks are safe defaults)
+    $horizonDays   = null;
+    $serviceLevel  = null;
+
+    if (is_array($job)) {
+        // If your table has these columns, use them; otherwise they stay null and are omitted.
+        if (isset($job['horizon_days']) && is_numeric($job['horizon_days'])) {
+            $horizonDays = max(1, (int)$job['horizon_days']);
+        }
+        if (isset($job['service_level']) && is_numeric($job['service_level'])) {
+            $serviceLevel = (float)$job['service_level'];
+        }
+    }
+
     try {
         // --- query items ---
         $itStmt = $DB->prepare("
-            SELECT id, avg_daily_demand, lead_time_days, unit_cost, safety_stock, IFNULL(order_cost,50) as order_cost
+            SELECT id, avg_daily_demand, lead_time_days, unit_cost, safety_stock, IFNULL(order_cost, 50) AS order_cost
             FROM items
             WHERE is_active = 1
         ");
@@ -215,8 +279,32 @@ function run_optimization_worker(PDO $DB, ?int $jobId = null): void
         $items = $itStmt->fetchAll(PDO::FETCH_ASSOC);
         if (empty($items)) throw new Exception("No active items to optimize");
 
-        // --- call Octave API instead of local CLI ---
-        $apiResponse = call_octave_api($items);
+        // --- remap for API: add item_id and ensure numeric types are sane ---
+        $payloadItems = [];
+        foreach ($items as $it) {
+            $itemId = isset($it['id']) ? (int)$it['id'] : 0;
+            if ($itemId <= 0) {
+                log_to_file("⚠️ Skipping item without valid id: " . json_encode($it));
+                continue;
+            }
+
+            $payloadItems[] = [
+                'item_id'          => $itemId,
+                'avg_daily_demand' => isset($it['avg_daily_demand']) ? (float)$it['avg_daily_demand'] : 0.0,
+                'lead_time_days'   => isset($it['lead_time_days'])   ? (float)$it['lead_time_days']   : 0.0,
+                'unit_cost'        => isset($it['unit_cost'])        ? (float)$it['unit_cost']        : 0.0,
+                // Optional inputs; the API can ignore if not used
+                'safety_stock'     => isset($it['safety_stock'])     ? (float)$it['safety_stock']     : null,
+                'order_cost'       => isset($it['order_cost'])       ? (float)$it['order_cost']       : null,
+            ];
+        }
+
+        if (empty($payloadItems)) {
+            throw new Exception("No valid items after remapping.");
+        }
+
+        // --- call Octave API (correct endpoint) ---
+        $apiResponse = call_octave_api($payloadItems, $horizonDays, $serviceLevel);
         log_to_file("Raw API response for job {$jobId}: " . json_encode($apiResponse));
 
         $results = normalize_results_payload($apiResponse);
@@ -231,10 +319,9 @@ function run_optimization_worker(PDO $DB, ?int $jobId = null): void
         log_to_file("Requested save of {$savedCount} rows for job {$jobId}");
 
         // ✅ Double-check DB
-        $checkStmt = $DB->prepare("SELECT * FROM optimization_results WHERE job_id = :job_id");
+        $checkStmt = $DB->prepare("SELECT COUNT(*) AS c FROM optimization_results WHERE job_id = :job_id");
         $checkStmt->execute(['job_id' => $jobId]);
-        $rows = $checkStmt->fetchAll(PDO::FETCH_ASSOC);
-        $dbCount = count($rows);
+        $dbCount = (int)($checkStmt->fetch(PDO::FETCH_ASSOC)['c'] ?? 0);
         log_to_file("Verification: job {$jobId} has {$dbCount} rows in optimization_results (expected {$savedCount})");
 
         // --- update snapshot ---
